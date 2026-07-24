@@ -1,0 +1,2 @@
+DB User & roles - in production these would need to be managed to grant least privilege, but for this POC I'm just using the root user
+Unit tests for ingest - I tend to prefer BDD tests in general, hence using them here generally. It's probably worth moving/duplicating some of these as unit tests for the ingest library given that it is also used outsied of teh /ingest endpoint call. Just leaving as a note for now
