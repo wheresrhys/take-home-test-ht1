@@ -37,42 +37,70 @@ function isRetryRequestBody(body: unknown): body is { references: string[] } {
 	return Array.isArray(references) && references.every((reference) => typeof reference === "string");
 }
 
-// Replays a single captured FormErrors row through the same ingest lib fn /ingest uses. Throws
-// (rather than returning a failure value) whenever the reference should settle as a rejected
-// entry, so that the caller's single Promise.allSettled naturally sorts successes from
-// failures without a still-failing reference aborting the rest of the batch.
+// Reasons this fn throws when a reference should settle rejected. They're logged (never returned
+// to the caller) inside the transaction callback; the outer catch re-throws them unchanged and
+// converts anything else — an unexpected failure from the transaction machinery itself
+// (client checkout, BEGIN/COMMIT/ROLLBACK) — into UNEXPECTED_ERROR_REASON so nothing leaks.
+const REPROCESS_REJECTION_REASONS = new Set([REPROCESSING_FAILED_REASON, UNEXPECTED_ERROR_REASON]);
+
+// Replays a single captured FormErrors row through the same ingest lib fn /ingest uses, then
+// deletes the FormErrors row — both inside a single transaction, so the re-ingest write and the
+// delete either both commit or both roll back. If ingest fails (returns errors or throws), the
+// transaction rolls back and the FormErrors record is kept; if the delete fails after a
+// successful write, the write is rolled back too — never an orphaned Forms row or a deleted
+// error record whose write didn't land. Throws (rather than returning a failure value) whenever
+// the reference should settle rejected, so the caller's single Promise.allSettled naturally
+// sorts successes from failures without a still-failing reference aborting the rest of the batch.
 async function reprocessFormErrorRecord(applicationReference: string, formErrorRecord: FormErrorRecord): Promise<unknown> {
-	let ingestResult;
-
 	try {
-		ingestResult = await ingestForm(formErrorRecord.form_content);
+		return await postgresClient.withTransaction(async (executor) => {
+			let ingestResult;
+
+			try {
+				ingestResult = await ingestForm(formErrorRecord.form_content, executor);
+			} catch (error) {
+				console.error("retry: unexpected error calling the ingest lib during retry", {
+					application_reference: applicationReference,
+					error,
+				});
+				throw new Error(UNEXPECTED_ERROR_REASON);
+			}
+
+			if ("errors" in ingestResult) {
+				console.error("retry: form still fails ingest on retry", {
+					application_reference: applicationReference,
+					errors: ingestResult.errors,
+				});
+				throw new Error(REPROCESSING_FAILED_REASON);
+			}
+
+			try {
+				await postgresClient.delete("formerrors", "id", formErrorRecord.id, executor);
+			} catch (error) {
+				console.error("retry: unexpected error deleting the FormErrors record after a successful retry", {
+					application_reference: applicationReference,
+					error,
+				});
+				throw new Error(UNEXPECTED_ERROR_REASON);
+			}
+
+			return ingestResult.data;
+		});
 	} catch (error) {
-		console.error("retry: unexpected error calling the ingest lib during retry", {
+		// Reasons thrown inside the callback are already logged — re-throw them so the reference
+		// settles rejected. Anything else is an unexpected failure from the transaction machinery
+		// itself (client checkout, BEGIN/COMMIT/ROLLBACK); log it with metadata and surface a
+		// generic reason so no internal detail leaks.
+		if (error instanceof Error && REPROCESS_REJECTION_REASONS.has(error.message)) {
+			throw error;
+		}
+
+		console.error("retry: unexpected error running the retry transaction", {
 			application_reference: applicationReference,
 			error,
 		});
 		throw new Error(UNEXPECTED_ERROR_REASON);
 	}
-
-	if ("errors" in ingestResult) {
-		console.error("retry: form still fails ingest on retry", {
-			application_reference: applicationReference,
-			errors: ingestResult.errors,
-		});
-		throw new Error(REPROCESSING_FAILED_REASON);
-	}
-
-	try {
-		await postgresClient.delete("formerrors", "id", formErrorRecord.id);
-	} catch (error) {
-		console.error("retry: unexpected error deleting the FormErrors record after a successful retry", {
-			application_reference: applicationReference,
-			error,
-		});
-		throw new Error(UNEXPECTED_ERROR_REASON);
-	}
-
-	return ingestResult.data;
 }
 
 export async function retryFailedForms(req: Request, res: Response): Promise<void> {

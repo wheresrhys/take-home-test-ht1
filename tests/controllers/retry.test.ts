@@ -9,12 +9,18 @@ jest.mock("../../src/providers/postgres-client", () => ({
 	postgresClient: {
 		getRecords: jest.fn(),
 		delete: jest.fn(),
+		withTransaction: jest.fn(),
 	},
 }));
 
 const mockedIngestForm = ingestForm as jest.MockedFunction<typeof ingestForm>;
 const mockedGetRecords = postgresClient.getRecords as jest.MockedFunction<typeof postgresClient.getRecords>;
 const mockedDelete = postgresClient.delete as jest.MockedFunction<typeof postgresClient.delete>;
+const mockedWithTransaction = postgresClient.withTransaction as jest.MockedFunction<typeof postgresClient.withTransaction>;
+
+// The one executor withTransaction hands the callback. Asserting BOTH the re-ingest and the
+// delete receive THIS same object proves they run inside a single transaction (i.e. atomically).
+const TRANSACTION_EXECUTOR = { query: jest.fn() };
 
 function buildFormErrorRecord(applicationReference: string, overrides: Record<string, unknown> = {}) {
 	return {
@@ -32,6 +38,9 @@ describe("POST /retry", () => {
 
 	beforeEach(() => {
 		consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+		// Faithful stand-in for the real helper: run the callback with the transaction executor,
+		// resolving with its result and rejecting (a rollback, in the real impl) if it throws.
+		mockedWithTransaction.mockImplementation(async (callback) => callback(TRANSACTION_EXECUTOR));
 	});
 
 	afterEach(() => {
@@ -64,7 +73,20 @@ describe("POST /retry", () => {
 
 			await request(app).post("/retry").send({ references: ["ref-success"] });
 
-			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 42);
+			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 42, TRANSACTION_EXECUTOR);
+		});
+
+		it("runs the re-ingest and the delete inside a single transaction (both on the same executor)", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-success", { id: 42, form_content: { tag: "reprocess" } });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockResolvedValue({ statusCode: 200, data: { firstName: "Ada" } as never });
+			mockedDelete.mockResolvedValue(undefined);
+
+			await request(app).post("/retry").send({ references: ["ref-success"] });
+
+			expect(mockedWithTransaction).toHaveBeenCalledTimes(1);
+			expect(mockedIngestForm).toHaveBeenCalledWith({ tag: "reprocess" }, TRANSACTION_EXECUTOR);
+			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 42, TRANSACTION_EXECUTOR);
 		});
 
 		it("returns a fulfilled entry for the successful reference", async () => {
@@ -188,7 +210,67 @@ describe("POST /retry", () => {
 				.send({ references: ["ref-success", "ref-fail", "ref-unknown"] });
 
 			expect(mockedDelete).toHaveBeenCalledTimes(1);
-			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 1);
+			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 1, TRANSACTION_EXECUTOR);
+		});
+	});
+
+	describe("POST /retry (transactional)", () => {
+		it("Structure: rolls back — keeps the FormErrors record and writes no Forms row — when ingest fails again", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-still-failing", { id: 7 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockResolvedValue({ statusCode: 400, errors: ["still invalid"] });
+
+			const response = await request(app).post("/retry").send({ references: ["ref-still-failing"] });
+
+			// The transaction was entered (so its rollback-on-throw governs the failed re-ingest),
+			// the FormErrors delete never ran, and the reference settled rejected.
+			expect(mockedWithTransaction).toHaveBeenCalledTimes(1);
+			expect(mockedDelete).not.toHaveBeenCalled();
+			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-still-failing" }]);
+		});
+
+		it("Edge: rolls back the whole transaction when the delete throws after a successful re-ingest", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-delete-throws", { id: 8 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockResolvedValue({ statusCode: 200, data: { firstName: "Ada" } as never });
+			mockedDelete.mockRejectedValue(new Error("delete failed mid-transaction"));
+
+			const response = await request(app).post("/retry").send({ references: ["ref-delete-throws"] });
+
+			// The delete threw inside the transaction, so withTransaction rejected (a rollback in the
+			// real impl — see the withTransaction unit tests): no orphaned Forms row is left committed
+			// for this reference, and it settles rejected without leaking the underlying error.
+			expect(response.status).toBe(200);
+			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-delete-throws" }]);
+			expect(JSON.stringify(response.body)).not.toContain("delete failed mid-transaction");
+			expect(consoleErrorSpy).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({ application_reference: "ref-delete-throws" }),
+			);
+		});
+
+		it("Edge: commits and rolls back references independently in a mixed batch", async () => {
+			const successRecord = buildFormErrorRecord("ref-ok", { id: 10, form_content: { tag: "ok" } });
+			const failureRecord = buildFormErrorRecord("ref-bad", { id: 11, form_content: { tag: "bad" } });
+			mockedGetRecords.mockResolvedValue([successRecord, failureRecord]);
+			mockedIngestForm.mockImplementation(async (data) =>
+				(data as { tag: string }).tag === "ok"
+					? { statusCode: 200, data: { firstName: "Ada" } as never }
+					: { statusCode: 400, errors: ["still invalid"] },
+			);
+			mockedDelete.mockResolvedValue(undefined);
+
+			const response = await request(app).post("/retry").send({ references: ["ref-ok", "ref-bad"] });
+
+			// One transaction per reference; the rolled-back one ("ref-bad") does not affect the
+			// committed one ("ref-ok") — only ref-ok's FormErrors row is deleted.
+			expect(mockedWithTransaction).toHaveBeenCalledTimes(2);
+			expect(mockedDelete).toHaveBeenCalledTimes(1);
+			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 10, TRANSACTION_EXECUTOR);
+			expect(response.body).toEqual([
+				{ status: "fulfilled", application_reference: "ref-ok", value: { firstName: "Ada" } },
+				{ status: "rejected", application_reference: "ref-bad" },
+			]);
 		});
 	});
 
