@@ -1,10 +1,18 @@
 import { ingestForm, transformData } from "../../../src/forms/lib/ingest";
 import { validateIngestedForm } from "../../../src/forms/lib/validator";
+import { lookupPostcode } from "../../../src/providers/idealpostcodes";
+import { postgresClient } from "../../../src/providers/postgres-client";
 import { IngestedFormSchema } from "../../../src/forms/schemas/ingested_schema";
 
 jest.mock("../../../src/forms/lib/validator");
+jest.mock("../../../src/providers/idealpostcodes");
+jest.mock("../../../src/providers/postgres-client", () => ({
+	postgresClient: { create: jest.fn() },
+}));
 
 const mockedValidateIngestedForm = validateIngestedForm as jest.MockedFunction<typeof validateIngestedForm>;
+const mockedLookupPostcode = lookupPostcode as jest.MockedFunction<typeof lookupPostcode>;
+const mockedCreate = postgresClient.create as jest.Mock;
 
 const GEOCODE_RESULT = { latitude: -5.05, longitude: 50.05 };
 
@@ -30,6 +38,11 @@ function buildValidIngestedForm(overrides: Partial<IngestedFormSchema> = {}): In
 }
 
 describe("ingestForm", () => {
+	beforeEach(() => {
+		mockedLookupPostcode.mockResolvedValue({ statusCode: 200, body: GEOCODE_RESULT });
+		mockedCreate.mockResolvedValue({});
+	});
+
 	afterEach(() => {
 		jest.resetAllMocks();
 	});
@@ -47,15 +60,24 @@ describe("ingestForm", () => {
 		expect("errors" in result && result.errors).toEqual(["(root) must have required property 'email'"]);
 	});
 
-	it("resolves with a 2xx statusCode and data when the validator reports valid data", async () => {
+	it("resolves with a 201 statusCode and the persisted record's id when the validator reports valid data", async () => {
 		mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
-		const validForm = { session_id: "abc" };
+		const validForm = buildValidIngestedForm();
 
 		const result = await ingestForm(validForm);
 
-		expect(result.statusCode).toBeGreaterThanOrEqual(200);
-		expect(result.statusCode).toBeLessThan(300);
-		expect("data" in result && result.data).toEqual(validForm);
+		expect(result.statusCode).toBe(201);
+		expect("data" in result && result.data).toEqual({ id: validForm.application_reference });
+	});
+
+	it("geocodes the submitted postcode and persists the transformed row via postgresClient.create", async () => {
+		mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
+		const validForm = buildValidIngestedForm();
+
+		await ingestForm(validForm);
+
+		expect(mockedLookupPostcode).toHaveBeenCalledWith(validForm.address.postcode);
+		expect(mockedCreate).toHaveBeenCalledWith("forms", transformData(validForm, GEOCODE_RESULT));
 	});
 
 	describe("discriminated union shape", () => {
@@ -70,11 +92,11 @@ describe("ingestForm", () => {
 
 		it("success result has a data value and no errors key", async () => {
 			mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
-			const validForm = { session_id: "abc" };
+			const validForm = buildValidIngestedForm();
 
 			const result = await ingestForm(validForm);
 
-			expect(result).toEqual({ statusCode: 200, data: validForm });
+			expect("data" in result).toBe(true);
 			expect("errors" in result).toBe(false);
 		});
 	});

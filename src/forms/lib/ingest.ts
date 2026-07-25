@@ -1,6 +1,8 @@
 import { validateIngestedForm } from "./validator";
 import { IngestedFormSchema } from "../schemas/ingested_schema";
 import { TransformedFormSchema } from "../schemas/transformed_schema";
+import { lookupPostcode } from "../../providers/idealpostcodes";
+import { postgresClient } from "../../providers/postgres-client";
 
 // Discriminated union: success and failure are mutually exclusive at the type level.
 // A success result never carries `errors`; a failure result never carries `data`.
@@ -52,17 +54,23 @@ export function transformData(
 	};
 }
 
-export async function ingestForm(data: unknown): Promise<IngestResult> {
+export async function ingestForm(data: unknown): Promise<IngestResult<{ id: string }>> {
 	const validationResult = validateIngestedForm(data);
 
 	if (!validationResult.valid) {
 		return { statusCode: 400, errors: validationResult.errors };
 	}
 
-	// Placeholder success branch: geocoding and persistence land in the next commit, which
-	// replaces this with the real happy path using transformData above. For now this only
-	// proves the success branch of the discriminated union by echoing back the validated input.
 	const validatedForm = data as IngestedFormSchema;
 
-	return { statusCode: 200, data: validatedForm as unknown as TransformedFormSchema };
+	// Geocode failures (idealpostcodes fails ~5% of calls by design) get full retry/error
+	// capture in a later ticket (I6); this ticket's scope assumes lookupPostcode succeeds.
+	const geocodeResponse = await lookupPostcode(validatedForm.address.postcode);
+	const geo = geocodeResponse.body as { latitude: number; longitude: number };
+
+	const transformedRow = transformData(validatedForm, geo);
+
+	await postgresClient.create("forms", transformedRow);
+
+	return { statusCode: 201, data: { id: transformedRow.applicationReference } };
 }
