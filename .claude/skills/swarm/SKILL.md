@@ -7,7 +7,8 @@ description: >-
   Biases toward tickets that unblock the most others. Each ticket subagent runs the
   /implement-ticket skill (branch, commits, tests, PR with "Closes #<n>", mermaid-diff). Runs as a
   continuously-refilling pool of up to 4 worker subagents (the orchestrator doesn't count): each
-  completion triggers a re-select + respawn until no eligible work remains. A stop command prompts
+  completion triggers a re-select + respawn until no eligible work remains; while idle, a "check
+  again" command forces a fresh GitHub re-scan for newly-available work. A stop command prompts
   the user to confirm halt-all vs drain. Orchestration only — PR maintenance, selection, worktree
   isolation, model routing, parallelism, refill, termination, teardown. Triggers: "swarm",
   "/swarm", "pick up ready tickets", "work the ready queue".
@@ -31,9 +32,9 @@ to PRs needing maintenance first, then fill the remainder with tickets.
 busy: every time a worker subagent finishes, immediately re-run selection (§1 maintenance first,
 then §2 tickets) and spawn a replacement for each newly-freed slot, up to the cap. Keep refilling
 until there is genuinely no eligible work left (no PR needs maintenance and no unblocked, not-in-
-flight `ready` ticket remains) — then go idle and report the pool is drained. A new completion or
-a freshly-`ready`/-conflicting PR later re-triggers a refill. The user can stop the loop at any
-time — see **Termination**.
+flight `ready` ticket remains) — then go idle and report the pool is drained. A new completion, a
+freshly-`ready`/-conflicting PR, or a **manual re-check** command from the user (see §4.5) later
+re-triggers a refill. The user can stop the loop at any time — see **Termination**.
 
 ## 1. Maintain open PRs — resolve conflicts + address feedback (first call on the budget)
 
@@ -118,6 +119,24 @@ Every time a worker subagent finishes (completions arrive as notifications, usua
 Track the live worker set (subagent id → what it's doing) across the whole run so the cap, refill,
 and termination logic all have an accurate count.
 
+## 4.5 Manual re-check (user asks to re-scan)
+
+While idle (pool drained, or free slots held open because remaining work was blocked), the queue
+can change without any worker finishing — a sibling PR merges elsewhere, a blocker closes, a new
+`ready` ticket or PR appears. swarm only auto-refills on a worker **completion**, so it won't
+notice these on its own. The user can force a fresh scan.
+
+If the user issues any re-check-like command — e.g. "check again", "re-check", "rescan", "look
+again", "any new work?", "refresh", "poll github" — immediately re-run selection from scratch
+against live GitHub state (§1 maintenance first, then §2 tickets) **without** waiting for a
+completion, and spawn workers for every newly-eligible unit up to the free slots (cap still 4;
+count workers already running). Report what the re-scan found:
+- If new work is eligible, spawn it and report each unit started (as in §4 step 2).
+- If nothing new is eligible, say so plainly (e.g. "re-checked — still N blocked, M in-flight,
+  nothing newly available") and stay idle.
+
+A manual re-check never stops or disturbs workers already running; it only fills idle slots.
+
 ## Termination (user asks to stop)
 
 If the user issues any stop-like command to the **orchestrator** — e.g. "stop swarming", "stop",
@@ -155,6 +174,9 @@ Confirm each removal; report anything skipped (e.g. a worktree with unpushed cha
   The orchestrator itself is not a worker and does not count toward the 4.
 - Keep the pool full: on every worker completion, refill freed slots (maintenance first, then
   tickets) until no eligible work remains — then go idle, don't exit.
+- On any re-check-like command from the user ("check again", "rescan", "any new work?"), re-run
+  selection against live GitHub immediately — without waiting for a completion — and fill idle
+  slots with newly-eligible work; report if the scan found nothing. Never disturbs running workers.
 - On any stop-like command from the user, suppress refilling immediately, then confirm via
   `AskUserQuestion` whether to **halt all now** (`TaskStop` every live worker) or **drain** (let
   running workers finish), and do exactly that. Never assume which.
