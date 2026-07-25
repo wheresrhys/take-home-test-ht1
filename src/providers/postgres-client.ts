@@ -1,4 +1,4 @@
-import { Pool, QueryResultRow } from "pg";
+import { DatabaseError, Pool, QueryResultRow } from "pg";
 
 const REQUIRED_ENV_VARS = ["PGHOST", "PGPORT", "PGDATABASE", "FORM_INGESTER_DB_PASSWORD"] as const;
 
@@ -65,6 +65,17 @@ async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id:
 	if (!rowCount) {
 		throw new Error(`postgres-client: delete affected 0 rows — no ${tableName} row with ${idColumn} = ${id}`);
 	}
+}
+
+// Postgres protocol-level failures (constraint violations, syntax errors, etc.) reject as pg's
+// own DatabaseError class — a first-party, stable signal that a given error came from the DB
+// itself, rather than from application code elsewhere in the request pipeline. Exported so
+// callers (e.g. the Express error-handling middleware in app.ts) can branch on "was this a DB
+// error" without string-matching on messages or inventing a parallel classification scheme.
+// Connection-level failures (DB unreachable) aren't DatabaseError instances — out of scope here,
+// see the ticket notes on not building a full DB-failure taxonomy.
+export function isDatabaseError(err: unknown): err is DatabaseError {
+	return err instanceof DatabaseError;
 }
 
 export interface PostgresClient extends Pool {
