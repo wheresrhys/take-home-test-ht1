@@ -8,12 +8,14 @@ jest.mock("../../src/forms/lib/ingest");
 jest.mock("../../src/providers/postgres-client", () => ({
 	postgresClient: {
 		getRecords: jest.fn(),
+		update: jest.fn(),
 		delete: jest.fn(),
 	},
 }));
 
 const mockedIngestForm = ingestForm as jest.MockedFunction<typeof ingestForm>;
 const mockedGetRecords = postgresClient.getRecords as jest.MockedFunction<typeof postgresClient.getRecords>;
+const mockedUpdate = postgresClient.update as jest.MockedFunction<typeof postgresClient.update>;
 const mockedDelete = postgresClient.delete as jest.MockedFunction<typeof postgresClient.delete>;
 
 function buildFormErrorRecord(applicationReference: string, overrides: Record<string, unknown> = {}) {
@@ -121,10 +123,11 @@ describe("POST /retry", () => {
 	});
 
 	describe("Edge: reprocess still fails", () => {
-		it("leaves the FormErrors record unchanged when ingest fails again", async () => {
+		it("does not delete the FormErrors record when ingest fails again", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-still-failing");
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedIngestForm.mockResolvedValue({ statusCode: 400, errors: ["still invalid"] });
+			mockedUpdate.mockResolvedValue(formErrorRecord);
 
 			await request(app).post("/retry").send({ references: ["ref-still-failing"] });
 
@@ -135,6 +138,7 @@ describe("POST /retry", () => {
 			const formErrorRecord = buildFormErrorRecord("ref-still-failing");
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedIngestForm.mockResolvedValue({ statusCode: 400, errors: ["some sensitive validator internals"] });
+			mockedUpdate.mockResolvedValue(formErrorRecord);
 
 			const response = await request(app).post("/retry").send({ references: ["ref-still-failing"] });
 
@@ -142,6 +146,91 @@ describe("POST /retry", () => {
 			// note that no error message is returned for security/privacy reasons
 			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-still-failing" }]);
 			expect(JSON.stringify(response.body)).not.toContain("some sensitive validator internals");
+		});
+	});
+
+	describe("POST /retry — still-failing reference", () => {
+		it("Usual: replaces schema_errors with the latest error via postgresClient.update, does not delete the row", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-still-failing", { id: 7 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockResolvedValue({ statusCode: 400, errors: ["still invalid"] });
+			mockedUpdate.mockResolvedValue(formErrorRecord);
+
+			const response = await request(app).post("/retry").send({ references: ["ref-still-failing"] });
+
+			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 7, {
+				schema_errors: JSON.stringify(["still invalid"]),
+			});
+			expect(mockedDelete).not.toHaveBeenCalled();
+			// still no error reason leaked to the caller
+			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-still-failing" }]);
+		});
+
+		it("Structure: writes a non-400 failure to runtime_errors rather than schema_errors", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-duplicate", { id: 8 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockResolvedValue({ statusCode: 409, errors: ["duplicate application_reference"] });
+			mockedUpdate.mockResolvedValue(formErrorRecord);
+
+			await request(app).post("/retry").send({ references: ["ref-duplicate"] });
+
+			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 8, {
+				runtime_errors: JSON.stringify(["duplicate application_reference"]),
+			});
+		});
+
+		it("Edge: a successful retry still deletes the row (regression guard) rather than calling update", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-success", { id: 9 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockResolvedValue({ statusCode: 200, data: { firstName: "Ada" } as never });
+			mockedDelete.mockResolvedValue(undefined);
+
+			await request(app).post("/retry").send({ references: ["ref-success"] });
+
+			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 9);
+			expect(mockedUpdate).not.toHaveBeenCalled();
+		});
+
+		it("Edge: a mixed batch settles each reference independently (success deleted, failure updated, no-match untouched)", async () => {
+			const successRecord = buildFormErrorRecord("ref-success", { id: 10, form_content: { tag: "success" } });
+			const failureRecord = buildFormErrorRecord("ref-fail", { id: 11, form_content: { tag: "fail" } });
+			mockedGetRecords.mockResolvedValue([successRecord, failureRecord]);
+			mockedIngestForm.mockImplementation(async (data) => {
+				if ((data as { tag: string }).tag === "success") {
+					return { statusCode: 200, data: { firstName: "Ada" } as never };
+				}
+				return { statusCode: 400, errors: ["still invalid"] };
+			});
+			mockedDelete.mockResolvedValue(undefined);
+			mockedUpdate.mockResolvedValue(failureRecord);
+
+			await request(app)
+				.post("/retry")
+				.send({ references: ["ref-success", "ref-fail", "ref-unknown"] });
+
+			expect(mockedDelete).toHaveBeenCalledTimes(1);
+			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 10);
+			expect(mockedUpdate).toHaveBeenCalledTimes(1);
+			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 11, {
+				schema_errors: JSON.stringify(["still invalid"]),
+			});
+		});
+
+		it("logs (but does not fail the request) when postgresClient.update itself throws", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-still-failing", { id: 12 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockResolvedValue({ statusCode: 400, errors: ["still invalid"] });
+			mockedUpdate.mockRejectedValue(new Error("connection terminated unexpectedly"));
+
+			const response = await request(app).post("/retry").send({ references: ["ref-still-failing"] });
+
+			expect(response.status).toBe(200);
+			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-still-failing" }]);
+			expect(JSON.stringify(response.body)).not.toContain("connection terminated unexpectedly");
+			expect(consoleErrorSpy).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({ application_reference: "ref-still-failing" }),
+			);
 		});
 	});
 
