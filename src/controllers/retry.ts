@@ -17,6 +17,8 @@ interface FormErrorRecord {
 type RetrySettledEntry = { status: "fulfilled"; value: unknown } | { status: "rejected"; reason: string };
 
 const NO_MATCHING_FORM_ERROR_RECORD_REASON = "no matching FormErrors record";
+const REPROCESSING_FAILED_REASON = "reprocessing failed";
+const UNEXPECTED_ERROR_REASON = "unexpected error while reprocessing";
 
 // Narrows an unknown request body down to the shape /retry requires: an object with a
 // `references` array of strings (each entry an `application_reference` to reprocess).
@@ -35,17 +37,35 @@ function isRetryRequestBody(body: unknown): body is { references: string[] } {
 // entry, so that the caller's single Promise.allSettled naturally sorts successes from
 // failures without a still-failing reference aborting the rest of the batch.
 async function reprocessFormErrorRecord(applicationReference: string, formErrorRecord: FormErrorRecord): Promise<unknown> {
-	const ingestResult = await ingestForm(formErrorRecord.form_content);
+	let ingestResult;
+
+	try {
+		ingestResult = await ingestForm(formErrorRecord.form_content);
+	} catch (error) {
+		console.error("retry: unexpected error calling the ingest lib during retry", {
+			application_reference: applicationReference,
+			error,
+		});
+		throw new Error(UNEXPECTED_ERROR_REASON);
+	}
 
 	if ("errors" in ingestResult) {
 		console.error("retry: form still fails ingest on retry", {
 			application_reference: applicationReference,
 			errors: ingestResult.errors,
 		});
-		throw new Error("reprocessing failed");
+		throw new Error(REPROCESSING_FAILED_REASON);
 	}
 
-	await postgresClient.delete("formerrors", "id", formErrorRecord.id);
+	try {
+		await postgresClient.delete("formerrors", "id", formErrorRecord.id);
+	} catch (error) {
+		console.error("retry: unexpected error deleting the FormErrors record after a successful retry", {
+			application_reference: applicationReference,
+			error,
+		});
+		throw new Error(UNEXPECTED_ERROR_REASON);
+	}
 
 	return ingestResult.data;
 }
@@ -67,11 +87,20 @@ export async function retryFailedForms(req: Request, res: Response): Promise<voi
 		return;
 	}
 
-	const formErrorRecords = await postgresClient.getRecords<FormErrorRecord>(
-		"formerrors",
-		"application_reference",
-		references,
-	);
+	let formErrorRecords: FormErrorRecord[];
+
+	try {
+		formErrorRecords = await postgresClient.getRecords<FormErrorRecord>(
+			"formerrors",
+			"application_reference",
+			references,
+		);
+	} catch (error) {
+		console.error("retry: unexpected error fetching FormErrors records", { references, error });
+		res.status(500).json({ error: "unexpected error processing retry request" });
+		return;
+	}
+
 	const formErrorRecordsByReference = new Map(
 		formErrorRecords.map((formErrorRecord) => [formErrorRecord.application_reference, formErrorRecord]),
 	);

@@ -28,7 +28,14 @@ function buildFormErrorRecord(applicationReference: string, overrides: Record<st
 }
 
 describe("POST /retry", () => {
+	let consoleErrorSpy: jest.SpiedFunction<typeof console.error>;
+
+	beforeEach(() => {
+		consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+	});
+
 	afterEach(() => {
+		consoleErrorSpy.mockRestore();
 		jest.resetAllMocks();
 	});
 
@@ -137,6 +144,91 @@ describe("POST /retry", () => {
 			expect(response.status).toBe(200);
 			expect(response.body).toEqual([{ status: "rejected", reason: expect.any(String) }]);
 			expect(JSON.stringify(response.body)).not.toContain("some sensitive validator internals");
+		});
+	});
+
+	describe("Structure: mixed batch of successes and failures", () => {
+		const successRecord = buildFormErrorRecord("ref-success", { id: 1, form_content: { tag: "success" } });
+		const failureRecord = buildFormErrorRecord("ref-fail", { id: 2, form_content: { tag: "fail" } });
+
+		beforeEach(() => {
+			mockedGetRecords.mockResolvedValue([successRecord, failureRecord]);
+			mockedIngestForm.mockImplementation(async (data) => {
+				if ((data as { tag: string }).tag === "success") {
+					return { statusCode: 200, data: { firstName: "Ada" } as never };
+				}
+				return { statusCode: 400, errors: ["still invalid"] };
+			});
+			mockedDelete.mockResolvedValue(undefined);
+		});
+
+		it("processes every reference even when one fails", async () => {
+			const response = await request(app)
+				.post("/retry")
+				.send({ references: ["ref-success", "ref-fail", "ref-unknown"] });
+
+			expect(response.status).toBe(200);
+			expect(response.body).toHaveLength(3);
+		});
+
+		it("returns fulfilled entries for successes and rejected for failures, in input order", async () => {
+			const response = await request(app)
+				.post("/retry")
+				.send({ references: ["ref-fail", "ref-success", "ref-unknown"] });
+
+			expect(response.body).toEqual([
+				{ status: "rejected", reason: expect.any(String) },
+				{ status: "fulfilled", value: { firstName: "Ada" } },
+				{ status: "rejected", reason: "no matching FormErrors record" },
+			]);
+		});
+
+		it("deletes only the FormErrors records that succeeded, leaving failed ones untouched", async () => {
+			await request(app)
+				.post("/retry")
+				.send({ references: ["ref-success", "ref-fail", "ref-unknown"] });
+
+			expect(mockedDelete).toHaveBeenCalledTimes(1);
+			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 1);
+		});
+	});
+
+	describe("logging", () => {
+		it("logs an unexpected error with application_reference metadata when the ingest lib throws", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-throws", { id: 3 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockRejectedValue(new Error("boom"));
+
+			await request(app).post("/retry").send({ references: ["ref-throws"] });
+
+			expect(consoleErrorSpy).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({ application_reference: "ref-throws" }),
+			);
+		});
+
+		it("does not leak the thrown error's message in the response", async () => {
+			const formErrorRecord = buildFormErrorRecord("ref-throws", { id: 3 });
+			mockedGetRecords.mockResolvedValue([formErrorRecord]);
+			mockedIngestForm.mockRejectedValue(new Error("sensitive internal detail"));
+
+			const response = await request(app).post("/retry").send({ references: ["ref-throws"] });
+
+			expect(response.status).toBe(200);
+			expect(JSON.stringify(response.body)).not.toContain("sensitive internal detail");
+		});
+
+		it("returns 500 without leaking internals when fetching FormErrors records unexpectedly fails", async () => {
+			mockedGetRecords.mockRejectedValue(new Error("connection terminated unexpectedly"));
+
+			const response = await request(app).post("/retry").send({ references: ["ref-db-down"] });
+
+			expect(response.status).toBe(500);
+			expect(JSON.stringify(response.body)).not.toContain("connection terminated unexpectedly");
+			expect(consoleErrorSpy).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({ references: ["ref-db-down"] }),
+			);
 		});
 	});
 });
