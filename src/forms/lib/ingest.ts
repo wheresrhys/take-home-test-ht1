@@ -10,6 +10,13 @@ export type IngestResult<T = TransformedFormSchema> =
 	| { statusCode: number; data: T }
 	| { statusCode: number; errors: string[] };
 
+// Postgres unique-violation error code (23505) — raised when Forms.application_reference
+// already exists (it's the primary key, per D3). `error` is narrowed from `unknown` since
+// pg rejects with plain objects rather than a typed Error subclass we can rely on.
+function isUniqueViolationError(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+}
+
 // Splits `name` on the last space: the final whitespace-separated token is lastName, and
 // everything before it is firstName (so firstName may itself contain spaces, e.g. a
 // 3-part name like "Mary Jane Watson" -> firstName "Mary Jane", lastName "Watson").
