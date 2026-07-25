@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node-dev --respawn src/index.ts",
+    "start": "DOTENV_CONFIG_PATH=.env.local node -r dotenv/config dist/index.js",
+    "dev": "DOTENV_CONFIG_PATH=.env.local ts-node-dev --respawn -r dotenv/config src/index.ts",
     "test": "jest",
     "db:start": "docker compose --env-file .env.local up -d"
   },
@@ -24,6 +24,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^4.22.1"
   }
 }
