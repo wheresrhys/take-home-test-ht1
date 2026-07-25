@@ -10,6 +10,13 @@ export type IngestResult<T = TransformedFormSchema> =
 	| { statusCode: number; data: T }
 	| { statusCode: number; errors: string[] };
 
+// Postgres unique-violation error code (23505) — raised when Forms.application_reference
+// already exists (it's the primary key, per D3). `error` is narrowed from `unknown` since
+// pg rejects with plain objects rather than a typed Error subclass we can rely on.
+function isUniqueViolationError(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+}
+
 // Splits `name` on the last space: the final whitespace-separated token is lastName, and
 // everything before it is firstName (so firstName may itself contain spaces, e.g. a
 // 3-part name like "Mary Jane Watson" -> firstName "Mary Jane", lastName "Watson").
@@ -72,7 +79,17 @@ export async function ingestForm(data: unknown): Promise<IngestResult<{ id: stri
 
 	const transformedRow = transformData(validatedForm, geo);
 
-	await postgresClient.create("forms", transformedRow);
+	try {
+		await postgresClient.create("forms", transformedRow);
+	} catch (error) {
+		// A duplicate delivery (provider sends at-least-once, per README) is expected, not a
+		// failure to retry — short-circuit to 409 without writing a FormErrors record
+		if (isUniqueViolationError(error)) {
+			return { statusCode: 409, errors: ["duplicate application_reference"] };
+		}
+
+		throw error;
+	}
 
 	return { statusCode: 201, data: { id: transformedRow.applicationReference } };
 }

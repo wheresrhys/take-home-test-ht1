@@ -80,6 +80,34 @@ describe("ingestForm", () => {
 		expect(mockedCreate).toHaveBeenCalledWith("forms", transformData(validForm, GEOCODE_RESULT));
 	});
 
+	describe("when create() rejects with a unique-violation on application_reference", () => {
+		it("resolves with a 409 statusCode and no data key", async () => {
+			mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
+			mockedCreate.mockRejectedValue({ code: "23505" });
+
+			const result = await ingestForm(buildValidIngestedForm());
+
+			expect(result.statusCode).toBe(409);
+			expect("data" in result).toBe(false);
+		});
+	});
+
+	describe("when create() rejects with a non-conflict error", () => {
+		it("does not respond 409 for a non-unique-violation Postgres error code, propagating the rejection instead", async () => {
+			mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
+			mockedCreate.mockRejectedValue({ code: "08006" });
+
+			await expect(ingestForm(buildValidIngestedForm())).rejects.toEqual({ code: "08006" });
+		});
+
+		it("propagates a rejection with no error.code without throwing from within the unique-violation check itself", async () => {
+			mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
+			mockedCreate.mockRejectedValue(new Error("connection reset"));
+
+			await expect(ingestForm(buildValidIngestedForm())).rejects.toThrow("connection reset");
+		});
+	});
+
 	describe("discriminated union shape", () => {
 		it("failure result has an errors array of the validator's messages and no data key", async () => {
 			mockedValidateIngestedForm.mockReturnValue({ valid: false, errors: ["bad field"] });

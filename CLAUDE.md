@@ -29,10 +29,11 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 
 ## Layout
 
-- `src/app.ts` — Express app + routes; `POST /ingest` is wired to `src/controllers/ingest.ts` via
-  `asyncHandler` (`src/lib/asyncHandler.ts`), so a rejected promise reaches the error-handling
-  middleware instead of crashing the process (Express 4 doesn't forward rejections on its own).
-  A 4-arg error-handling middleware is registered last: it always logs the error (message, stack,
+- `src/app.ts` — Express app + routes; `POST /ingest` is wired to `src/controllers/ingest.ts` and
+  `POST /retry` is wired to `src/controllers/retry.ts`, both via `asyncHandler`
+  (`src/lib/asyncHandler.ts`), so a rejected promise reaches the error-handling middleware instead
+  of crashing the process (Express 4 doesn't forward rejections on its own). A 4-arg
+  error-handling middleware is registered last: it always logs the error (message, stack,
   `application_reference` read defensively off `req.body.data`, method, path) and responds with a
   generic `5xx` body that never leaks internals. If the error is **not** a DB error
   (`isDatabaseError`, from `postgres-client.ts`), it also writes a best-effort `FormErrors` row
@@ -41,10 +42,30 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `/retry`; DB errors skip that write (the DB is presumably down, so writing would just throw
   again and mask the original error). `src/index.ts` — server bootstrap (`PORT`, default 3000).
 - `src/lib/asyncHandler.ts` — generic Express 4 helper: wraps an async route handler so a
-  rejection is forwarded via `next(err)`. Not forms-specific — reusable by `/retry` (I5/R1) too.
+  rejection is forwarded via `next(err)`. Not forms-specific — shared by `/ingest` and `/retry`.
 - `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm`, maps
   the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`, narrowing
   via `'data' in result`). No validation/geocode/transform/persist logic lives here.
+- `src/controllers/retry.ts` — `retryFailedForms`, wired up as `POST /retry`. Accepts
+  `{ references: string[] }` (each a `FormErrors.application_reference`); `400` on any other
+  shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
+  each reference it fetches the matching `FormErrors` row (`getRecords("formerrors",
+  "application_reference", references)`), replays `form_content` through the same `ingestForm`
+  (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — as one independent
+  promise per reference inside a single `Promise.allSettled` (so one still-failing reference
+  never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
+  only when ingest succeeds. Responds `200` with an array, one entry per input reference,
+  **preserving input order**. Each entry carries its `application_reference` plus a `status`
+  (`{status, application_reference, value}` on success / `{status, application_reference}` on
+  failure); an unmatched reference settles rejected without ever calling the ingest lib or
+  `delete`. Failure reasons are **deliberately withheld from the response** for security/privacy
+  reasons (they can leak validator internals or stack traces) — the exact failure shape a caller
+  should see still needs more thought. Unexpected errors (ingest lib throwing, `delete` throwing,
+  the initial `getRecords` fetch throwing) are logged via `console.error` with
+  `application_reference`/`references` metadata but only ever surface a `500` generic body to the
+  caller — never the underlying error. Deliberately
+  **not transactional** (delete and re-ingest are separate operations, not one DB transaction)
+  — a follow-up ticket specs that.
 - `src/forms/schemas/` — `ingested_schema.ts` (inbound shape), `transformed_schema.ts` (outbound shape).
   Note the mismatch is deliberate: snake_case→camelCase, `name`→`firstName`/`lastName`,
   `date_of_birth: string`→`dateOfBirth: Date`, gender `"other"`→`"prefer-not-to-say"`,
@@ -63,9 +84,13 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   undefined/empty. Happy path (I3): I1 validation (400 + validator messages on failure) →
   `idealpostcodes.lookupPostcode` on the postcode → `transformData` → `postgresClient.create
   ("forms", transformedRow)` → `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`.
-  Geocode-failure handling and duplicate/conflict handling land in later tickets (I4/I5) — this
-  lib currently assumes `lookupPostcode` succeeds; any error it throws/rejects is caught by the
-  `app.ts` error-handling middleware (I6), not handled here.
+  Duplicate handling (I5): a `create()` rejection is checked with the colocated
+  `isUniqueViolationError(error)` (matches Postgres unique-violation code `23505`, raised on a
+  repeat `Forms.application_reference` — the PK, per D3); on a match, `ingestForm` short-circuits
+  to `{ statusCode: 409, errors: [...] }` without writing a `FormErrors` record (a duplicate
+  delivery is expected, not a failure to retry) and without leaking the raw pg error. Any other
+  rejection is rethrown unchanged, caught by the `app.ts` error-handling middleware (I6). Geocode
+  failure handling remains a later ticket — this lib currently assumes `lookupPostcode` succeeds.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
@@ -131,7 +156,13 @@ Providers are intentionally flaky to force real resilience/retry handling.
 - `npm run dev` — ts-node-dev, respawn on change.
 - `npm run build` — tsc → `dist/`.
 - `npm start` — run built server.
-- `npm test` — jest.
+- `npm test` — jest, with `.env.local` preloaded (`DOTENV_CONFIG_PATH=.env.local` + jest's
+  `setupFiles: ["dotenv/config"]`) before any test file's module graph evaluates — needed
+  because `src/app.ts` now transitively imports `src/providers/postgres-client.ts` (via the
+  `/retry` controller), which throws at import time if its required env vars aren't already
+  set. So every suite that imports the app, not just DB-integration suites, needs a live
+  `npm run db:start` (or an already-running docker Postgres) for its module graph to load —
+  even ones that mock `postgresClient`'s methods.
 - `npm run db:start` — install Docker, then run this to provision a local Postgres via
   Docker Compose, using the throwaway dev credentials committed in `.env.local`, then
   apply every `db/schema/*.sql` file (see `db:apply-schema` / `db/schema/` above).

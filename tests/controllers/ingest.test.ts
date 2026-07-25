@@ -220,4 +220,23 @@ describe("POST /ingest", () => {
 			});
 		});
 	});
+
+	describe("when create() rejects with a unique-violation on application_reference", () => {
+		beforeEach(() => {
+			mockedCreate.mockRejectedValue({ code: "23505" });
+		});
+
+		it("responds 409", async () => {
+			const response = await postIngest(buildIngestedForm());
+
+			expect(response.status).toBe(409);
+		});
+
+		it("does not write a FormErrors record for a duplicate", async () => {
+			await postIngest(buildIngestedForm());
+
+			expect(mockedCreate).toHaveBeenCalledTimes(1);
+			expect(mockedCreate).not.toHaveBeenCalledWith("formerrors", expect.anything());
+		});
+	});
 });

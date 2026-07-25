@@ -4,6 +4,8 @@ import { ingestFormController } from "./controllers/ingest";
 import { asyncHandler } from "./lib/asyncHandler";
 import { isDatabaseError, postgresClient } from "./providers/postgres-client";
 
+import { retryFailedForms } from "./controllers/retry";
+
 const app = express();
 
 app.use(express.json());
@@ -62,5 +64,7 @@ app.use(async (err: unknown, req: Request, res: Response, next: NextFunction): P
 
 	res.status(500).json({ message: "Something went wrong processing your request" });
 });
+
+app.post("/retry", retryFailedForms);
 
 export default app;
