@@ -83,8 +83,7 @@ export async function ingestForm(data: unknown): Promise<IngestResult<{ id: stri
 		await postgresClient.create("forms", transformedRow);
 	} catch (error) {
 		// A duplicate delivery (provider sends at-least-once, per README) is expected, not a
-		// failure to retry — short-circuit to 409 without writing a FormErrors record (that
-		// capture-for-retry path is I6's, and is reserved for genuine failures).
+		// failure to retry — short-circuit to 409 without writing a FormErrors record
 		if (isUniqueViolationError(error)) {
 			return { statusCode: 409, errors: ["duplicate application_reference"] };
 		}
