@@ -1,3 +1,6 @@
+# Claude Code swarm worktrees (ephemeral per-ticket checkouts)
+.claude/worktrees/
+
 # Logs
 logs
 *.log

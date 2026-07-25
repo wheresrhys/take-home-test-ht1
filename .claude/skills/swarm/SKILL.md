@@ -38,11 +38,14 @@ For each selected issue, launch an Agent (default background, so they run in par
 - `model` = the ticket's model label — `opus` | `sonnet` | `fable` (exactly the label). Don't
   substitute.
 - `description`: `"Implement #<n>"`.
-- Prompt: run the `implement-ticket` skill for issue `<n>` and return its result (PR number + URL
-  + test status).
+- Prompt: **first `git fetch origin` and create the ticket branch off `origin/main`** (the worktree
+  is cut from local `main`, which may be stale relative to origin — basing on `origin/main` picks
+  up already-merged sibling tickets), then run the `implement-ticket` skill for issue `<n>` and
+  return its result (PR number + URL + test status).
 
 The subagent owns branch/commits/tests/PR/mermaid-diff via `implement-ticket`. swarm does not
-duplicate that logic.
+duplicate that logic — it only pins the branch base to `origin/main` so parallel worktrees don't
+build on a stale local checkout.
 
 ## 3. Report
 
@@ -63,4 +66,5 @@ Confirm each removal; report anything skipped (e.g. a worktree with unpushed cha
 - Never pick a blocked ticket; never exceed 4 concurrent.
 - Each subagent runs the model the ticket label dictates.
 - Worktree isolation is mandatory (parallel branches must not share a working tree).
+- Every ticket branch is based on freshly-fetched `origin/main`, never on the local checkout.
 - Per-ticket work goes through `implement-ticket` — don't reinvent it here.
