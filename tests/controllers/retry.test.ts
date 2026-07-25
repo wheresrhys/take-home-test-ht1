@@ -79,6 +79,43 @@ describe("POST /retry", () => {
 		});
 	});
 
+	describe("Edge: unknown reference", () => {
+		it("returns a rejected entry for a reference with no matching FormErrors record", async () => {
+			mockedGetRecords.mockResolvedValue([]);
+
+			const response = await request(app).post("/retry").send({ references: ["ref-unknown"] });
+
+			expect(response.status).toBe(200);
+			expect(response.body).toEqual([{ status: "rejected", reason: "no matching FormErrors record" }]);
+		});
+
+		it("does not call the ingest lib or delete for an unmatched reference", async () => {
+			mockedGetRecords.mockResolvedValue([]);
+
+			await request(app).post("/retry").send({ references: ["ref-unknown"] });
+
+			expect(mockedIngestForm).not.toHaveBeenCalled();
+			expect(mockedDelete).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("Edge: empty references array", () => {
+		it("returns 200 with an empty array", async () => {
+			const response = await request(app).post("/retry").send({ references: [] });
+
+			expect(response.status).toBe(200);
+			expect(response.body).toEqual([]);
+		});
+
+		it("does not call getRecords, the ingest lib, or delete", async () => {
+			await request(app).post("/retry").send({ references: [] });
+
+			expect(mockedGetRecords).not.toHaveBeenCalled();
+			expect(mockedIngestForm).not.toHaveBeenCalled();
+			expect(mockedDelete).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("Edge: reprocess still fails", () => {
 		it("leaves the FormErrors record unchanged when ingest fails again", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-still-failing");

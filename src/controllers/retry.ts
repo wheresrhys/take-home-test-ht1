@@ -60,6 +60,13 @@ export async function retryFailedForms(req: Request, res: Response): Promise<voi
 
 	const { references } = body;
 
+	// Guard explicitly rather than relying on getRecords' own empty-ids early return: an empty
+	// batch must never call getRecords, the ingest lib, or delete at all.
+	if (references.length === 0) {
+		res.json([]);
+		return;
+	}
+
 	const formErrorRecords = await postgresClient.getRecords<FormErrorRecord>(
 		"formerrors",
 		"application_reference",
