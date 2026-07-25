@@ -24,8 +24,8 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - Express 4 HTTP server.
 - Jest + ts-jest, supertest for HTTP-level tests.
 - Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema, the
-  `form_ingester` role, and the app's `pg` connection pool (`src/providers/postgres-client.ts`)
-  are wired up; query methods (`create`/`getRecords`/`delete`) not yet attached (see `tasks.md`).
+  `form_ingester` role, and the app's `pg` connection pool (`src/providers/postgres-client.ts`),
+  incl. its `create`/`getRecords`/`delete` query methods, are wired up.
 
 ## Layout
 
@@ -54,9 +54,23 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     `PGDATABASE`/`FORM_INGESTER_DB_PASSWORD` (throws naming every missing/empty var, never the
     password value); `user` is hardcoded to `"form_ingester"` in code, never read from env. The
     `postgresClient` singleton is built by calling it once at module load. Deliberately does not
-    return `HttpResponse<T>` — `pg`'s `Pool` has no HTTP status to wrap. Query methods
-    (`create`/`getRecords`/`delete`) attach onto this in a later ticket.
-- `tests/` — mirrors `src/`.
+    return `HttpResponse<T>` — `pg`'s `Pool` has no HTTP status to wrap. Three generic CRUD
+    methods are attached onto the singleton (not exported standalone): `create<T>(tableName,
+    data)` (INSERT ... RETURNING \*), `getRecords<T>(tableName, idColumn, ids)` (SELECT ... WHERE
+    idColumn IN (...), with an early-return `[]` guard for an empty `ids` array — avoids an
+    invalid empty `IN ()`), and `delete(tableName, idColumn, id)` (DELETE ... WHERE idColumn = id,
+    a no-op if nothing matches). All three use parameterised queries for values; `tableName`/
+    `idColumn` are only ever passed by trusted internal call sites (`Forms`/`FormErrors`), never
+    from request bodies, so they're interpolated directly. `delete` is attached as an object
+    property (not a `function delete` declaration) since `delete` is a reserved word as a
+    standalone identifier but a valid property key. None of the three catch/transform `pg`
+    errors — callers (ingest/retry) branch on error shape (e.g. `error.code === '23505'` for a
+    primary-key conflict).
+- `tests/` — mirrors `src/`. `tests/providers/postgres-client.test.ts` unit-tests
+  `createPostgresPool()`/the singleton with `pg` mocked; `tests/providers/postgres-client-crud.test.ts`
+  integration-tests `create`/`getRecords`/`delete` against the real docker DB (kept in a separate
+  file since the two approaches — mocked vs real `pg` — can't coexist in one jest file once `pg`
+  is auto-mocked at the top).
 - `db/schema/` — one `.sql` file per schema object (table, role, etc), applied by
   `npm run db:start` in **filename-sort order** via `db/apply-schema.sh`. Prefix files if
   ordering matters, relative to the existing uppercase-leading names (e.g.
