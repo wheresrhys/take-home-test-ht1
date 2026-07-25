@@ -31,3 +31,4 @@
 # Retry API
 
 1. Create a POST /retry endpoint that when passed {references: [application_reference]} fetches each of those from the FormErrors table (using getRecords), and then runs them through the ingest library function. Wrap in a Promise.allSettled. For each success delete the corresponding FormErrors record. For each failure leave the record unchanged. Respond with an array, essentially the Promise.allSettled result.
+2. Make each per-reference retry atomic: add transaction support to the postgres client and wrap the successful re-ingest write and the FormErrors delete in a single transaction, so a crash between them can neither lose a form nor leave a stale error record.
