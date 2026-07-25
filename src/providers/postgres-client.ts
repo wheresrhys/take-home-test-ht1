@@ -59,6 +59,34 @@ async function getRecords<T extends QueryResultRow>(
 	return rows;
 }
 
+async function update<T extends QueryResultRow>(
+	pool: Pool,
+	tableName: string,
+	idColumn: string,
+	id: string | number,
+	data: Record<string, unknown>,
+): Promise<T> {
+	const columnNames = Object.keys(data);
+	const values = Object.values(data);
+	// updated_at is always bumped to now() alongside the caller's columns, rather than left to
+	// the caller to pass — every update() call represents the row changing, so this keeps
+	// call sites from having to remember it.
+	const setClauses = columnNames
+		.map((columnName, index) => `${columnName} = $${index + 1}`)
+		.concat("updated_at = now()");
+
+	const { rows } = await pool.query<T>(
+		`UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${idColumn} = $${values.length + 1} RETURNING *`,
+		[...values, id],
+	);
+
+	if (rows.length === 0) {
+		throw new Error(`postgres-client: update affected 0 rows — no ${tableName} row with ${idColumn} = ${id}`);
+	}
+
+	return rows[0];
+}
+
 async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id: string | number): Promise<void> {
 	const { rowCount } = await pool.query(`DELETE FROM ${tableName} WHERE ${idColumn} = $1`, [id]);
 
@@ -70,10 +98,16 @@ async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id:
 export interface PostgresClient extends Pool {
 	create<T extends QueryResultRow>(tableName: string, data: Record<string, unknown>): Promise<T>;
 	getRecords<T extends QueryResultRow>(tableName: string, idColumn: string, ids: (string | number)[]): Promise<T[]>;
+	update<T extends QueryResultRow>(
+		tableName: string,
+		idColumn: string,
+		id: string | number,
+		data: Record<string, unknown>,
+	): Promise<T>;
 	delete(tableName: string, idColumn: string, id: string | number): Promise<void>;
 }
 
-// Singleton pool, built once at module load, with create/getRecords/delete query methods
+// Singleton pool, built once at module load, with create/getRecords/update/delete query methods
 // attached (rather than exported standalone) so callers hang a single postgresClient off
 // this module instead of importing the pool and the query helpers separately. `delete` is a
 // reserved word as a declared identifier, but is a perfectly valid object property name.
@@ -84,5 +118,11 @@ export const postgresClient: PostgresClient = Object.assign(pool, {
 		create<T>(pool, tableName, data),
 	getRecords: <T extends QueryResultRow>(tableName: string, idColumn: string, ids: (string | number)[]) =>
 		getRecords<T>(pool, tableName, idColumn, ids),
+	update: <T extends QueryResultRow>(
+		tableName: string,
+		idColumn: string,
+		id: string | number,
+		data: Record<string, unknown>,
+	) => update<T>(pool, tableName, idColumn, id, data),
 	delete: (tableName: string, idColumn: string, id: string | number) => deleteRecord(pool, tableName, idColumn, id),
 });
