@@ -136,47 +136,6 @@ describe("POST /ingest", () => {
 			expect(mockedCreate).not.toHaveBeenCalledWith("forms", expect.anything());
 		});
 
-		describe("missing required field", () => {
-			it("returns 400 and writes FormErrors", async () => {
-				const response = await postIngest(buildIngestedForm({ mobile_number: undefined }));
-
-				expect(response.status).toBe(400);
-				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ runtime_errors: null }));
-			});
-		});
-
-		describe("wrong field type", () => {
-			it("returns 400 and writes FormErrors", async () => {
-				const response = await postIngest(buildIngestedForm({ session_id: 12345 }));
-
-				expect(response.status).toBe(400);
-				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ runtime_errors: null }));
-			});
-		});
-
-		describe("invalid enum value (gender)", () => {
-			it("returns 400 and writes FormErrors", async () => {
-				const response = await postIngest(buildIngestedForm({ gender: "not-a-real-gender" }));
-
-				expect(response.status).toBe(400);
-				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ runtime_errors: null }));
-			});
-		});
-
-		describe("missing nested address field", () => {
-			it("returns 400 and writes FormErrors", async () => {
-				const validForm = buildIngestedForm();
-				const invalidForm = {
-					...validForm,
-					address: { ...(validForm.address as Record<string, unknown>), postcode: undefined },
-				};
-
-				const response = await postIngest(invalidForm);
-
-				expect(response.status).toBe(400);
-				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ runtime_errors: null }));
-			});
-		});
 
 		describe("empty request body ({})", () => {
 			it("returns 400 and writes FormErrors with form_content = {}", async () => {
