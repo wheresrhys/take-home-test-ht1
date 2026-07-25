@@ -1,8 +1,14 @@
 import request from "supertest";
+import { DatabaseError } from "pg";
 
 jest.mock("../../src/providers/idealpostcodes");
+// isDatabaseError is reimplemented here (rather than jest.requireActual'd) so this suite never
+// loads the real postgres-client module — that module builds a live pg Pool from env vars at
+// import time, which this mocked-DB suite has no need for. The logic mirrors the real guard
+// exactly: pg's own DatabaseError class, imported directly above.
 jest.mock("../../src/providers/postgres-client", () => ({
 	postgresClient: { create: jest.fn() },
+	isDatabaseError: (err: unknown) => err instanceof require("pg").DatabaseError,
 }));
 
 import app from "../../src/app";
@@ -87,6 +93,131 @@ describe("POST /ingest", () => {
 					latitude: GEOCODE_RESULT.latitude,
 				}),
 			);
+		});
+	});
+
+	describe("error handling", () => {
+		let consoleErrorSpy: jest.SpyInstance;
+
+		beforeEach(() => {
+			consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+		});
+
+		afterEach(() => {
+			consoleErrorSpy.mockRestore();
+		});
+
+		function findFormErrorsCreateCall(): unknown[] | undefined {
+			return (postgresClient.create as jest.Mock).mock.calls.find(([tableName]) => tableName === "formerrors");
+		}
+
+		describe("a runtime error mid-ingest (transform throws on a malformed geocode response)", () => {
+			beforeEach(() => {
+				// A malformed/empty geocode body (rather than a rejection) is how the provider's
+				// HttpResponse<T> convention surfaces a bad result — transformData then throws
+				// reading .latitude/.longitude off it, which is the "runtime error" this covers.
+				mockedLookupPostcode.mockResolvedValue({ statusCode: 200, body: undefined });
+			});
+
+			it("responds 500 with a generic body that does not leak internals", async () => {
+				const response = await postIngest(buildIngestedForm());
+
+				expect(response.status).toBe(500);
+				expect(response.body).toEqual({ message: "Something went wrong processing your request" });
+			});
+
+			it("logs the error together with request metadata including application_reference", async () => {
+				await postIngest(buildIngestedForm());
+
+				expect(consoleErrorSpy).toHaveBeenCalledWith(
+					"Unhandled error while processing request",
+					expect.objectContaining({
+						message: expect.any(String),
+						stack: expect.any(String),
+						applicationReference: "GRU-123089-2026",
+						method: "POST",
+						path: "/ingest",
+					}),
+				);
+			});
+
+			it("writes a FormErrors row with runtime_errors populated and schema_errors left blank", async () => {
+				await postIngest(buildIngestedForm());
+
+				const formErrorsCall = findFormErrorsCreateCall();
+
+				expect(formErrorsCall).toBeDefined();
+				expect(formErrorsCall?.[1]).toMatchObject({
+					application_reference: "GRU-123089-2026",
+					runtime_errors: expect.any(String),
+				});
+				expect(formErrorsCall?.[1]).not.toHaveProperty("schema_errors");
+			});
+		});
+
+		describe("a DB error (the forms create() call itself rejects)", () => {
+			beforeEach(() => {
+				mockedCreate.mockRejectedValueOnce(
+					new DatabaseError("duplicate key value violates unique constraint", 0, "error"),
+				);
+			});
+
+			it("logs the error when the DB create() call itself throws/rejects", async () => {
+				await postIngest(buildIngestedForm());
+
+				expect(consoleErrorSpy).toHaveBeenCalledWith(
+					"Unhandled error while processing request",
+					expect.objectContaining({ applicationReference: "GRU-123089-2026" }),
+				);
+			});
+
+			it("does not write an additional FormErrors row when the failing call was itself a DB error", async () => {
+				await postIngest(buildIngestedForm());
+
+				expect(findFormErrorsCreateCall()).toBeUndefined();
+				expect(mockedCreate).toHaveBeenCalledTimes(1);
+			});
+
+			it("responds 500 with a generic body that does not leak DB internals", async () => {
+				const response = await postIngest(buildIngestedForm());
+
+				expect(response.status).toBe(500);
+				expect(response.body).toEqual({ message: "Something went wrong processing your request" });
+			});
+		});
+
+		describe("an error before application_reference is known (malformed JSON body)", () => {
+			function postMalformedJson() {
+				return request(app).post("/ingest").set("Content-Type", "application/json").send("{not-json");
+			}
+
+			it("logs the error with application_reference: null when the failure happens before the reference is parsed", async () => {
+				await postMalformedJson();
+
+				expect(consoleErrorSpy).toHaveBeenCalledWith(
+					"Unhandled error while processing request",
+					expect.objectContaining({ applicationReference: null }),
+				);
+			});
+
+			it("still writes a FormErrors row with application_reference null, capturing whatever form_content was available", async () => {
+				await postMalformedJson();
+
+				const formErrorsCall = findFormErrorsCreateCall();
+
+				expect(formErrorsCall).toBeDefined();
+				expect(formErrorsCall?.[1]).toMatchObject({
+					application_reference: null,
+					form_content: expect.any(String),
+				});
+			});
+
+			it("never includes stack trace / error message in the client-facing response", async () => {
+				const response = await postMalformedJson();
+
+				expect(response.status).toBe(500);
+				expect(response.body).toEqual({ message: "Something went wrong processing your request" });
+			});
 		});
 	});
 });
