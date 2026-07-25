@@ -156,12 +156,12 @@ describe("POST /ingest", () => {
 				);
 			});
 
-			it("writes FormErrors with application_reference = null when not a string", async () => {
+			it("writes FormErrors with application_reference coerced to a string when not a string", async () => {
 				await postIngest(buildIngestedForm({ application_reference: 12345 }));
 
 				expect(mockedCreate).toHaveBeenCalledWith(
 					"formerrors",
-					expect.objectContaining({ application_reference: null }),
+					expect.objectContaining({ application_reference: "12345" }),
 				);
 			});
 		});
@@ -175,6 +175,25 @@ describe("POST /ingest", () => {
 				expect(mockedCreate).toHaveBeenCalledTimes(1);
 				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.anything());
 			});
+		});
+	});
+
+	describe("when create() rejects with a unique-violation on application_reference", () => {
+		beforeEach(() => {
+			mockedCreate.mockRejectedValue({ code: "23505" });
+		});
+
+		it("responds 409", async () => {
+			const response = await postIngest(buildIngestedForm());
+
+			expect(response.status).toBe(409);
+		});
+
+		it("does not write a FormErrors record for a duplicate", async () => {
+			await postIngest(buildIngestedForm());
+
+			expect(mockedCreate).toHaveBeenCalledTimes(1);
+			expect(mockedCreate).not.toHaveBeenCalledWith("formerrors", expect.anything());
 		});
 	});
 });

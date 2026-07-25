@@ -29,14 +29,35 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 
 ## Layout
 
-- `src/app.ts` — Express app + routes; `POST /ingest` is wired to `src/controllers/ingest.ts`.
-  `src/index.ts` — server bootstrap (`PORT`, default 3000).
+- `src/app.ts` — Express app + routes; `POST /ingest` is wired to `src/controllers/ingest.ts`,
+  `POST /retry` is wired to `src/controllers/retry.ts`. `src/index.ts` — server bootstrap
+  (`PORT`, default 3000).
 - `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm`, maps
   the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`, narrowing
   via `'data' in result`). No validation/geocode/transform/persist logic lives here. On a failure
   result the response body is a fixed, generic `{ message: string }` — the lib's `errors` array
   is deliberately dropped here, never forwarded to the caller (no validator diagnostics, no raw
   submitted data).
+- `src/controllers/retry.ts` — `retryFailedForms`, wired up as `POST /retry`. Accepts
+  `{ references: string[] }` (each a `FormErrors.application_reference`); `400` on any other
+  shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
+  each reference it fetches the matching `FormErrors` row (`getRecords("formerrors",
+  "application_reference", references)`), replays `form_content` through the same `ingestForm`
+  (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — as one independent
+  promise per reference inside a single `Promise.allSettled` (so one still-failing reference
+  never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
+  only when ingest succeeds. Responds `200` with an array, one entry per input reference,
+  **preserving input order**. Each entry carries its `application_reference` plus a `status`
+  (`{status, application_reference, value}` on success / `{status, application_reference}` on
+  failure); an unmatched reference settles rejected without ever calling the ingest lib or
+  `delete`. Failure reasons are **deliberately withheld from the response** for security/privacy
+  reasons (they can leak validator internals or stack traces) — the exact failure shape a caller
+  should see still needs more thought. Unexpected errors (ingest lib throwing, `delete` throwing,
+  the initial `getRecords` fetch throwing) are logged via `console.error` with
+  `application_reference`/`references` metadata but only ever surface a `500` generic body to the
+  caller — never the underlying error. Deliberately
+  **not transactional** (delete and re-ingest are separate operations, not one DB transaction)
+  — a follow-up ticket specs that.
 - `src/forms/schemas/` — `ingested_schema.ts` (inbound shape), `transformed_schema.ts` (outbound shape).
   Note the mismatch is deliberate: snake_case→camelCase, `name`→`firstName`/`lastName`,
   `date_of_birth: string`→`dateOfBirth: Date`, gender `"other"`→`"prefer-not-to-say"`,
@@ -59,11 +80,17 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `FormErrors` row via `postgresClient.create("formerrors", { application_reference, form_content,
   schema_errors, runtime_errors: null })` — `form_content` is the raw submitted `data` unmodified,
   `schema_errors` is the validator's error array, and `application_reference` is defensively
-  extracted from the unvalidated payload (`null` if missing/not a string) so the row is written
-  even when validation itself failed on that field — captured so the record can be fixed and
-  replayed via `/retry` (R1) after a deploy. Geocode-failure handling, duplicate/conflict
-  handling, and error-handling middleware land in later tickets (I5/I6) — this lib currently
-  assumes `lookupPostcode` succeeds.
+  extracted from the unvalidated payload (coerced to a string when truthy but not already a
+  string, `null` when missing/falsy) so the row is written even when validation itself failed
+  on that field — captured so the record can be fixed and
+  replayed via `/retry` (R1) after a deploy. Duplicate handling (I5): a `create()` rejection is
+  checked with the colocated `isUniqueViolationError(error)` (matches Postgres unique-violation
+  code `23505`, raised on a repeat `Forms.application_reference` — the PK, per D3); on a match,
+  `ingestForm` short-circuits to `{ statusCode: 409, errors: [...] }` without writing a
+  `FormErrors` record (a duplicate delivery is expected, not a failure to retry) and without
+  leaking the raw pg error. Any other rejection is rethrown unchanged. Geocode-failure handling
+  and error-handling middleware land in later tickets (I6) — this lib currently assumes
+  `lookupPostcode` succeeds.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
@@ -119,7 +146,13 @@ Providers are intentionally flaky to force real resilience/retry handling.
 - `npm run dev` — ts-node-dev, respawn on change.
 - `npm run build` — tsc → `dist/`.
 - `npm start` — run built server.
-- `npm test` — jest.
+- `npm test` — jest, with `.env.local` preloaded (`DOTENV_CONFIG_PATH=.env.local` + jest's
+  `setupFiles: ["dotenv/config"]`) before any test file's module graph evaluates — needed
+  because `src/app.ts` now transitively imports `src/providers/postgres-client.ts` (via the
+  `/retry` controller), which throws at import time if its required env vars aren't already
+  set. So every suite that imports the app, not just DB-integration suites, needs a live
+  `npm run db:start` (or an already-running docker Postgres) for its module graph to load —
+  even ones that mock `postgresClient`'s methods.
 - `npm run db:start` — install Docker, then run this to provision a local Postgres via
   Docker Compose, using the throwaway dev credentials committed in `.env.local`, then
   apply every `db/schema/*.sql` file (see `db:apply-schema` / `db/schema/` above).
