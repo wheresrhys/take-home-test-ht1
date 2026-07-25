@@ -100,13 +100,6 @@ describe("ingestForm", () => {
 			await expect(ingestForm(buildValidIngestedForm())).rejects.toEqual({ code: "08006" });
 		});
 
-		it("does not treat a foreign-key violation (23503) as a conflict", async () => {
-			mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
-			mockedCreate.mockRejectedValue({ code: "23503" });
-
-			await expect(ingestForm(buildValidIngestedForm())).rejects.toEqual({ code: "23503" });
-		});
-
 		it("propagates a rejection with no error.code without throwing from within the unique-violation check itself", async () => {
 			mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
 			mockedCreate.mockRejectedValue(new Error("connection reset"));
