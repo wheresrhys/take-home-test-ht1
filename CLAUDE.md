@@ -23,7 +23,8 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - TypeScript, strict mode (`tsconfig.json`), target ES2022, commonjs.
 - Express 4 HTTP server.
 - Jest + ts-jest, supertest for HTTP-level tests.
-- Postgres planned (see `tasks.md`) — not yet wired up.
+- Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema, roles and
+  app client not yet wired up (see `tasks.md`).
 
 ## Layout
 
@@ -39,6 +40,11 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
 - `tests/` — mirrors `src/`.
+- `db/schema/` — one `.sql` file per schema object (table, role, etc), applied by
+  `npm run db:start` in **filename-sort order** via `db/apply-schema.sh`. Prefix files with
+  a number (e.g. `01_form_ingester_role.sql`) if ordering matters. Files must be
+  **idempotent** (`CREATE TABLE IF NOT EXISTS`, guarded `CREATE ROLE`, etc.) — every file is
+  re-applied on every `db:start`, including against an already-provisioned database.
 
 Providers are intentionally flaky to force real resilience/retry handling.
 
@@ -58,6 +64,12 @@ Providers are intentionally flaky to force real resilience/retry handling.
 - `npm run build` — tsc → `dist/`.
 - `npm start` — run built server.
 - `npm test` — jest.
+- `npm run db:start` — install Docker, then run this to provision a local Postgres via
+  Docker Compose, using the throwaway dev credentials committed in `.env.local`, then
+  apply every `db/schema/*.sql` file (see `db:apply-schema` / `db/schema/` above).
+- `npm run db:apply-schema` — waits for Postgres to accept connections, then applies
+  `db/schema/*.sql` in filename-sort order; run standalone to re-apply schema without
+  restarting the container.
 
 ## Working agreements
 
