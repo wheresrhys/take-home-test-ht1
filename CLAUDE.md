@@ -36,6 +36,16 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `ingested_schema.schema.json` is generated, not hand-written — see Conventions below for the
   workflow to change it.
 - `src/forms/examples/` — sample form JSON.
+- `src/forms/lib/validator.ts` — `validateIngestedForm`, validates unknown input against the
+  generated `ingested_schema.schema.json` via Ajv.
+- `src/forms/lib/ingest.ts` — `ingestForm(data: unknown): Promise<IngestResult>`, the single
+  library entry point every ingest/retry caller hangs off. `IngestResult<T = TransformedFormSchema>`
+  is a discriminated union — `{ statusCode, data: T }` on success (no `errors` key) or
+  `{ statusCode, errors: string[] }` on failure (no `data` key) — so callers narrow via
+  `'data' in result` / `'errors' in result` rather than checking whether `errors` is
+  undefined/empty. Currently only wires up I1 validation (400 + validator messages on failure,
+  placeholder 200 echoing the validated input on success); geocode/transform/persist land in a
+  later ticket.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
