@@ -5,9 +5,12 @@ description: >-
   pick unblocked `ready` GitHub issues and implement them in parallel. Each unit of work runs in
   its own git worktree via a subagent on the model named by the ticket's label (fable/sonnet/opus).
   Biases toward tickets that unblock the most others. Each ticket subagent runs the
-  /implement-ticket skill (branch, commits, tests, PR with "Closes #<n>", mermaid-diff).
-  Orchestration only — PR maintenance, selection, worktree isolation, model routing, parallelism,
-  teardown. Triggers: "swarm", "/swarm", "pick up ready tickets", "work the ready queue".
+  /implement-ticket skill (branch, commits, tests, PR with "Closes #<n>", mermaid-diff). Runs as a
+  continuously-refilling pool of up to 4 worker subagents (the orchestrator doesn't count): each
+  completion triggers a re-select + respawn until no eligible work remains. A stop command prompts
+  the user to confirm halt-all vs drain. Orchestration only — PR maintenance, selection, worktree
+  isolation, model routing, parallelism, refill, termination, teardown. Triggers: "swarm",
+  "/swarm", "pick up ready tickets", "work the ready queue".
 ---
 
 # swarm
@@ -17,9 +20,20 @@ merge conflicts and address outstanding feedback so they can merge — then (b) 
 tickets**. This skill orchestrates; per-ticket work is delegated to the
 [`implement-ticket`](../implement-ticket/SKILL.md) skill.
 
-**Total concurrency across both kinds is capped at 4.** PR maintenance goes first — merging open
-PRs unblocks downstream tickets — so allocate the budget to PRs needing maintenance first, then
-fill the remainder with tickets.
+**Concurrency is capped at 4 worker subagents.** The top-level swarm orchestrator (the parent
+agent running this skill) does not count toward the cap — it only selects, spawns, reports and
+refills; it holds no worktree and does no ticket work. So: 1 orchestrator + up to 4 workers.
+
+PR maintenance goes first — merging open PRs unblocks downstream tickets — so allocate free slots
+to PRs needing maintenance first, then fill the remainder with tickets.
+
+**This is a continuously-refilling pool, not a one-shot batch.** The orchestrator keeps 4 slots
+busy: every time a worker subagent finishes, immediately re-run selection (§1 maintenance first,
+then §2 tickets) and spawn a replacement for each newly-freed slot, up to the cap. Keep refilling
+until there is genuinely no eligible work left (no PR needs maintenance and no unblocked, not-in-
+flight `ready` ticket remains) — then go idle and report the pool is drained. A new completion or
+a freshly-`ready`/-conflicting PR later re-triggers a refill. The user can stop the loop at any
+time — see **Termination**.
 
 ## 1. Maintain open PRs — resolve conflicts + address feedback (first call on the budget)
 
@@ -62,10 +76,11 @@ Filter and rank:
   (`gh issue view <n> --json closedByPullRequestsReferences` / `git branch -a`).
 - **Bias to unblockers** — rank by the count of *open* issues in `blocking` (how many others this
   ticket unblocks), highest first; tie-break on lowest issue number.
-- Take as many as the **remaining budget** allows (4 minus the feedback subagents launched in
-  step 1).
+- Take as many as the **free slots** allow (4 minus workers currently running — both tracks).
 
-If neither step 1 nor step 2 finds work, report that and stop.
+If, on a given selection pass, neither §1 nor §2 yields eligible work **and** no workers are
+running, the pool is drained: report that and go idle (do not exit the loop — a later completion
+or new PR can refill).
 
 ## 3. Spawn one worktree subagent per ticket
 
@@ -84,15 +99,43 @@ The subagent owns branch/commits/tests/PR/mermaid-diff via `implement-ticket`. s
 duplicate that logic — it only pins the branch base to `origin/main` so parallel worktrees don't
 build on a stale local checkout.
 
-## 4. Report
+## 4. On each completion: report, then refill
 
-As each subagent finishes, collect its result and **record its worktree path** for teardown.
-Summarise both tracks:
-- **Feedback PRs**: PR → what was addressed → commit pushed → reviewer reply URL (or "no-op,
-  nothing outstanding").
-- **Tickets**: issue → branch → PR URL → test status → whether mermaid-diff posted.
+Every time a worker subagent finishes (completions arrive as notifications, usually one at a time):
+1. **Record** its worktree path for teardown and note whether it succeeded or needs the user.
+2. **Report** that unit:
+   - **Maintained PRs**: PR → conflicts resolved? → feedback addressed (+ reviewer reply URL) →
+     commit pushed → now mergeable? (or "no-op, nothing outstanding").
+   - **Tickets**: issue → branch → PR URL → test status → whether mermaid-diff posted.
+   - Flag anything that failed tests, still conflicts after the merge, couldn't open a PR, or
+     couldn't push so the user can intervene.
+3. **Refill** — unless termination has been requested (see below), immediately re-run selection
+   (§1 then §2) for the now-free slot(s) and spawn replacements up to the cap. A finished ticket
+   often makes its PR eligible for maintenance and unblocks downstream tickets, so a completion
+   usually creates fresh work. If nothing is eligible and no workers remain, report the pool is
+   drained and go idle.
 
-Flag anything that failed tests, couldn't open a PR, or couldn't push so the user can intervene.
+Track the live worker set (subagent id → what it's doing) across the whole run so the cap, refill,
+and termination logic all have an accurate count.
+
+## Termination (user asks to stop)
+
+If the user issues any stop-like command to the **orchestrator** — e.g. "stop swarming", "stop",
+"exit", "halt", "cancel", "abort", "that's enough" — do **not** guess. First stop refilling
+(launch no new workers), then **ask the user to confirm which they mean**, via `AskUserQuestion`
+with these two options:
+- **Halt all now** — immediately stop every running worker subagent (`TaskStop` each live worker
+  id), abandoning in-flight work. Use for an urgent full stop.
+- **Drain** — stop starting new work, but let the workers already running finish and report
+  normally. No new refills after this.
+
+Then do exactly what they pick:
+- *Halt all now* → `TaskStop` every tracked live worker, confirm each is stopped, report what was
+  abandoned (branch/worktree state may be partial), and exit the loop.
+- *Drain* → keep the refill suppressed, await the running workers' completions, report each as it
+  lands (§4 steps 1–2 only, no refill), and exit the loop once the pool empties.
+
+Either way, leave worktrees in place for teardown unless the user also asks to clean up.
 
 ## 5. Teardown (after the user is done)
 
@@ -104,8 +147,17 @@ Then, per worktree created:
 Confirm each removal; report anything skipped (e.g. a worktree with unpushed changes).
 
 ## Rules
-- Feedback on open PRs is handled first; ready tickets fill the remaining budget.
-- Never pick a blocked ticket; never exceed **4 concurrent subagents total** across both tracks.
+- Open-PR maintenance (conflicts + feedback) is handled first; ready tickets fill the remaining
+  budget. One subagent per PR does both concerns for that PR.
+- Resolve conflicts by merging `origin/main` into the PR branch — never rebase/force-push a shared
+  branch.
+- Never pick a blocked ticket; never exceed **4 concurrent worker subagents** across both tracks.
+  The orchestrator itself is not a worker and does not count toward the 4.
+- Keep the pool full: on every worker completion, refill freed slots (maintenance first, then
+  tickets) until no eligible work remains — then go idle, don't exit.
+- On any stop-like command from the user, suppress refilling immediately, then confirm via
+  `AskUserQuestion` whether to **halt all now** (`TaskStop` every live worker) or **drain** (let
+  running workers finish), and do exactly that. Never assume which.
 - Each subagent runs the model the ticket label dictates (feedback PRs: the linked ticket's label,
   else `sonnet`).
 - One worktree per unit of work; parallel branches must never share a working tree. Ticket work
