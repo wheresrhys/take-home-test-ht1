@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, QueryResultRow } from "pg";
 
 const REQUIRED_ENV_VARS = ["PGHOST", "PGPORT", "PGDATABASE", "FORM_INGESTER_DB_PASSWORD"] as const;
 
@@ -20,6 +20,69 @@ export const createPostgresPool = (): Pool => {
 	});
 };
 
-// Singleton pool, built once at module load. D8 attaches create/getRecords/delete query
-// methods onto this via postgresClient.query(...).
-export const postgresClient: Pool = createPostgresPool();
+// Generic CRUD methods attached onto the singleton pool below. Table/column identifiers
+// (tableName/idColumn) are only ever passed by trusted internal call sites (Forms/FormErrors
+// repositories) — never sourced from request bodies — so they're interpolated directly into
+// the query text. All *values* go through as query parameters ($1, $2, ...), never concatenated.
+async function create<T extends QueryResultRow>(
+	pool: Pool,
+	tableName: string,
+	data: Record<string, unknown>,
+): Promise<T> {
+	const columnNames = Object.keys(data);
+	const values = Object.values(data);
+	const placeholders = values.map((_value, index) => `$${index + 1}`).join(", ");
+
+	const { rows } = await pool.query<T>(
+		`INSERT INTO ${tableName} (${columnNames.join(", ")}) VALUES (${placeholders}) RETURNING *`,
+		values,
+	);
+
+	return rows[0];
+}
+
+async function getRecords<T extends QueryResultRow>(
+	pool: Pool,
+	tableName: string,
+	idColumn: string,
+	ids: (string | number)[],
+): Promise<T[]> {
+	// Guard early: an empty IN (...) is invalid SQL, and there can be no matches anyway.
+	if (ids.length === 0) {
+		return [];
+	}
+
+	const placeholders = ids.map((_id, index) => `$${index + 1}`).join(", ");
+
+	const { rows } = await pool.query<T>(`SELECT * FROM ${tableName} WHERE ${idColumn} IN (${placeholders})`, ids);
+
+	return rows;
+}
+
+async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id: string | number): Promise<void> {
+	const { rowCount } = await pool.query(`DELETE FROM ${tableName} WHERE ${idColumn} = $1`, [id]);
+
+	if (!rowCount) {
+		throw new Error(`postgres-client: delete affected 0 rows — no ${tableName} row with ${idColumn} = ${id}`);
+	}
+}
+
+export interface PostgresClient extends Pool {
+	create<T extends QueryResultRow>(tableName: string, data: Record<string, unknown>): Promise<T>;
+	getRecords<T extends QueryResultRow>(tableName: string, idColumn: string, ids: (string | number)[]): Promise<T[]>;
+	delete(tableName: string, idColumn: string, id: string | number): Promise<void>;
+}
+
+// Singleton pool, built once at module load, with create/getRecords/delete query methods
+// attached (rather than exported standalone) so callers hang a single postgresClient off
+// this module instead of importing the pool and the query helpers separately. `delete` is a
+// reserved word as a declared identifier, but is a perfectly valid object property name.
+const pool = createPostgresPool();
+
+export const postgresClient: PostgresClient = Object.assign(pool, {
+	create: <T extends QueryResultRow>(tableName: string, data: Record<string, unknown>) =>
+		create<T>(pool, tableName, data),
+	getRecords: <T extends QueryResultRow>(tableName: string, idColumn: string, ids: (string | number)[]) =>
+		getRecords<T>(pool, tableName, idColumn, ids),
+	delete: (tableName: string, idColumn: string, id: string | number) => deleteRecord(pool, tableName, idColumn, id),
+});
