@@ -14,7 +14,17 @@ export type IngestResult<T = TransformedFormSchema> =
 // already exists (it's the primary key, per D3). `error` is narrowed from `unknown` since
 // pg rejects with plain objects rather than a typed Error subclass we can rely on.
 function isUniqueViolationError(error: unknown): boolean {
-	return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+	return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
+}
+
+// Defensively extracts application_reference from an unvalidated payload — coerces a truthy
+// value to a string (it may not have validated as one), `null` when falsy/missing, so a
+// malformed field never blocks writing the FormErrors row.
+function extractApplicationReference(data: unknown): string | null {
+	const applicationReference = (data as { application_reference?: unknown } | null | undefined)
+		?.application_reference;
+
+	return applicationReference ? String(applicationReference) : null;
 }
 
 // Splits `name` on the last space: the final whitespace-separated token is lastName, and
@@ -67,6 +77,13 @@ export async function ingestForm(data: unknown): Promise<IngestResult<{ id: stri
 	const validationResult = validateIngestedForm(data);
 
 	if (!validationResult.valid) {
+		await postgresClient.create("formerrors", {
+			application_reference: extractApplicationReference(data),
+			form_content: data,
+			schema_errors: validationResult.errors,
+			runtime_errors: null,
+		});
+
 		return { statusCode: 400, errors: validationResult.errors };
 	}
 

@@ -45,7 +45,10 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   rejection is forwarded via `next(err)`. Not forms-specific — shared by `/ingest` and `/retry`.
 - `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm`, maps
   the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`, narrowing
-  via `'data' in result`). No validation/geocode/transform/persist logic lives here.
+  via `'data' in result`). No validation/geocode/transform/persist logic lives here. On a failure
+  result the response body is a fixed, generic `{ message: string }` — the lib's `errors` array
+  is deliberately dropped here, never forwarded to the caller (no validator diagnostics, no raw
+  submitted data).
 - `src/controllers/retry.ts` — `retryFailedForms`, wired up as `POST /retry`. Accepts
   `{ references: string[] }` (each a `FormErrors.application_reference`); `400` on any other
   shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
@@ -81,10 +84,17 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   discriminated union — `{ statusCode, data: T }` on success (no `errors` key) or
   `{ statusCode, errors: string[] }` on failure (no `data` key) — so callers narrow via
   `'data' in result` / `'errors' in result` rather than checking whether `errors` is
-  undefined/empty. Happy path (I3): I1 validation (400 + validator messages on failure) →
-  `idealpostcodes.lookupPostcode` on the postcode → `transformData` → `postgresClient.create
-  ("forms", transformedRow)` → `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`.
-  Duplicate handling (I5): a `create()` rejection is checked with the colocated
+  undefined/empty. Happy path (I3): I1 validation → `idealpostcodes.lookupPostcode` on the
+  postcode → `transformData` → `postgresClient.create("forms", transformedRow)` →
+  `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`. Schema-invalid path
+  (I4): on I1 validator failure, before returning `{ statusCode: 400, errors }`, writes a
+  `FormErrors` row via `postgresClient.create("formerrors", { application_reference, form_content,
+  schema_errors, runtime_errors: null })` — `form_content` is the raw submitted `data` unmodified,
+  `schema_errors` is the validator's error array, and `application_reference` is defensively
+  extracted from the unvalidated payload (coerced to a string when truthy but not already a
+  string, `null` when missing/falsy) so the row is written even when validation itself failed
+  on that field — captured so the record can be fixed and replayed via `/retry` (R1) after a
+  deploy. Duplicate handling (I5): a `create()` rejection is checked with the colocated
   `isUniqueViolationError(error)` (matches Postgres unique-violation code `23505`, raised on a
   repeat `Forms.application_reference` — the PK, per D3); on a match, `ingestForm` short-circuits
   to `{ statusCode: 409, errors: [...] }` without writing a `FormErrors` record (a duplicate
