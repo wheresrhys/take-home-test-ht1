@@ -52,8 +52,13 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   undefined/empty. Happy path (I3): I1 validation (400 + validator messages on failure) →
   `idealpostcodes.lookupPostcode` on the postcode → `transformData` → `postgresClient.create
   ("forms", transformedRow)` → `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`.
-  Geocode-failure handling, duplicate/conflict handling, and error-handling middleware land in
-  later tickets (I5/I6) — this lib currently assumes `lookupPostcode` succeeds.
+  Duplicate handling (I5): a `create()` rejection is checked with the colocated
+  `isUniqueViolationError(error)` (matches Postgres unique-violation code `23505`, raised on a
+  repeat `Forms.application_reference` — the PK, per D3); on a match, `ingestForm` short-circuits
+  to `{ statusCode: 409, errors: [...] }` without writing a `FormErrors` record (a duplicate
+  delivery is expected, not a failure to retry) and without leaking the raw pg error. Any other
+  rejection is rethrown unchanged. Geocode-failure handling and error-handling middleware land in
+  later tickets (I6) — this lib currently assumes `lookupPostcode` succeeds.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
