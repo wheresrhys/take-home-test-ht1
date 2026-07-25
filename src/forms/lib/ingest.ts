@@ -56,20 +56,6 @@ export function transformData(
 	};
 }
 
-// Best-effort extraction of application_reference from an as-yet-unvalidated payload, for
-// tagging the FormErrors row. Defensive because validation may itself have failed on this
-// field (or the payload may not be an object at all) — FormErrors.application_reference is
-// nullable (D4) precisely to allow that.
-function extractApplicationReference(data: unknown): string | null {
-	if (typeof data !== "object" || data === null) {
-		return null;
-	}
-
-	const applicationReference = (data as Record<string, unknown>).application_reference;
-
-	return typeof applicationReference === "string" ? applicationReference : null;
-}
-
 export async function ingestForm(data: unknown): Promise<IngestResult<{ id: string }>> {
 	const validationResult = validateIngestedForm(data);
 
