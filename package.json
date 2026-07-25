@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "DOTENV_CONFIG_PATH=.env.local node -r dotenv/config dist/index.js",
     "dev": "DOTENV_CONFIG_PATH=.env.local ts-node-dev --respawn -r dotenv/config src/index.ts",
-    "test": "jest",
+    "test": "DOTENV_CONFIG_PATH=.env.local jest",
     "generate:schema": "ts-json-schema-generator --path src/forms/schemas/ingested_schema.ts --type IngestedFormSchema --no-top-ref -o src/forms/schemas/ingested_schema.schema.json",
     "db:start": "docker compose --env-file .env.local up -d && npm run db:apply-schema",
     "db:apply-schema": "./db/apply-schema.sh"
