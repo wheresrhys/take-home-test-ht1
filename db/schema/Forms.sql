@@ -25,3 +25,4 @@ CREATE TABLE IF NOT EXISTS forms (
 
 CREATE INDEX IF NOT EXISTS forms_date_of_birth_idx ON forms (date_of_birth);
 CREATE INDEX IF NOT EXISTS forms_postcode_idx ON forms (postcode);
+CREATE INDEX IF NOT EXISTS forms_session_id_idx ON forms (session_id);
