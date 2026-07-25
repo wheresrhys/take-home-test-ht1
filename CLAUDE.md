@@ -29,9 +29,20 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 
 ## Layout
 
-- `src/app.ts` — Express app + routes; `POST /ingest` is wired to `src/controllers/ingest.ts`,
-  `POST /retry` is wired to `src/controllers/retry.ts`. `src/index.ts` — server bootstrap
-  (`PORT`, default 3000).
+- `src/app.ts` — Express app + routes; `POST /ingest` is wired to `src/controllers/ingest.ts` and
+  `POST /retry` is wired to `src/controllers/retry.ts`, both via `asyncHandler`
+  (`src/lib/asyncHandler.ts`), so a rejected promise reaches the error-handling middleware instead
+  of crashing the process (Express 4 doesn't forward rejections on its own). A 4-arg
+  error-handling middleware is registered last: it always logs the error (message, stack,
+  `application_reference` read defensively off `req.body.data`, method, path) and responds with a
+  generic `5xx` body that never leaks internals. If the error is **not** a DB error
+  (`isDatabaseError`, from `postgres-client.ts`), it also writes a best-effort `FormErrors` row
+  (`application_reference`, `form_content` = raw request body, `runtime_errors` populated,
+  `schema_errors` left blank) via `postgresClient.create` so the form can be reprocessed via
+  `/retry`; DB errors skip that write (the DB is presumably down, so writing would just throw
+  again and mask the original error). `src/index.ts` — server bootstrap (`PORT`, default 3000).
+- `src/lib/asyncHandler.ts` — generic Express 4 helper: wraps an async route handler so a
+  rejection is forwarded via `next(err)`. Not forms-specific — shared by `/ingest` and `/retry`.
 - `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm`, maps
   the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`, narrowing
   via `'data' in result`). No validation/geocode/transform/persist logic lives here. On a failure
@@ -82,15 +93,14 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `schema_errors` is the validator's error array, and `application_reference` is defensively
   extracted from the unvalidated payload (coerced to a string when truthy but not already a
   string, `null` when missing/falsy) so the row is written even when validation itself failed
-  on that field — captured so the record can be fixed and
-  replayed via `/retry` (R1) after a deploy. Duplicate handling (I5): a `create()` rejection is
-  checked with the colocated `isUniqueViolationError(error)` (matches Postgres unique-violation
-  code `23505`, raised on a repeat `Forms.application_reference` — the PK, per D3); on a match,
-  `ingestForm` short-circuits to `{ statusCode: 409, errors: [...] }` without writing a
-  `FormErrors` record (a duplicate delivery is expected, not a failure to retry) and without
-  leaking the raw pg error. Any other rejection is rethrown unchanged. Geocode-failure handling
-  and error-handling middleware land in later tickets (I6) — this lib currently assumes
-  `lookupPostcode` succeeds.
+  on that field — captured so the record can be fixed and replayed via `/retry` (R1) after a
+  deploy. Duplicate handling (I5): a `create()` rejection is checked with the colocated
+  `isUniqueViolationError(error)` (matches Postgres unique-violation code `23505`, raised on a
+  repeat `Forms.application_reference` — the PK, per D3); on a match, `ingestForm` short-circuits
+  to `{ statusCode: 409, errors: [...] }` without writing a `FormErrors` record (a duplicate
+  delivery is expected, not a failure to retry) and without leaking the raw pg error. Any other
+  rejection is rethrown unchanged, caught by the `app.ts` error-handling middleware (I6). Geocode
+  failure handling remains a later ticket — this lib currently assumes `lookupPostcode` succeeds.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
@@ -110,10 +120,20 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     property (not a `function delete` declaration) since `delete` is a reserved word as a
     standalone identifier but a valid property key. None of the three catch/transform `pg`
     errors — callers (ingest/retry) branch on error shape (e.g. `error.code === '23505'` for a
-    primary-key conflict).
+    primary-key conflict). Also exports `isDatabaseError(err)`, a `err instanceof DatabaseError`
+    guard (pg's own class, re-exported from `pg-protocol` — a first-party, stable signal, not
+    string-matching) — reused by the `app.ts` error middleware to distinguish "the DB call itself
+    failed" from every other runtime error. Only covers protocol-level failures (constraint
+    violations, syntax errors); a fully unreachable DB (connection refused) isn't a
+    `DatabaseError` instance — accepted as out of scope for now (no full DB-failure taxonomy).
 - `tests/` — mirrors `src/`. `tests/controllers/ingest.test.ts` is the BDD/supertest suite for
   `POST /ingest`, mocking `idealpostcodes.lookupPostcode` and the db client's `create` — no real
-  network/DB. `tests/providers/postgres-client.test.ts` unit-tests
+  network/DB; its `postgres-client` mock reimplements `isDatabaseError` against pg's real
+  `DatabaseError` class (rather than `jest.requireActual`) so the suite never loads the real
+  module and its env-var-backed `Pool`. Covers the error-handling middleware's three paths: a
+  runtime error mid-ingest, a DB error (skips the `FormErrors` write), and an error before
+  `application_reference` is parseable (malformed JSON body).
+  `tests/providers/postgres-client.test.ts` unit-tests
   `createPostgresPool()`/the singleton with `pg` mocked; `tests/providers/postgres-client-crud.test.ts`
   integration-tests `create`/`getRecords`/`delete` against the real docker DB (kept in a separate
   file since the two approaches — mocked vs real `pg` — can't coexist in one jest file once `pg`
