@@ -11,10 +11,15 @@ interface FormErrorRecord {
 	runtime_errors: unknown;
 }
 
-// Mirrors Promise.allSettled's own per-entry shape ({status, value} / {status, reason}), so the
-// response body is that shape verbatim — just with `reason` narrowed to a string, since a raw
-// Error doesn't serialise usefully over JSON (and could leak a stack trace to the caller).
-type RetrySettledEntry = { status: "fulfilled"; value: unknown } | { status: "rejected"; reason: string };
+// One result row per requested reference. Mirrors Promise.allSettled's `status` field and, on
+// success, its `value`. Every row carries the `application_reference` it relates to so the caller
+// can correlate results back to their input. Deliberately NO `reason`/error field on rejected
+// rows: the failure reason is withheld from the caller for security/privacy reasons (it can leak
+// validator internals or a stack trace). Exactly what — if anything — a caller should be told
+// about a failure still needs more thought; the reason is logged server-side in the meantime.
+type RetrySettledEntry =
+	| { status: "fulfilled"; application_reference: string; value: unknown }
+	| { status: "rejected"; application_reference: string };
 
 const NO_MATCHING_FORM_ERROR_RECORD_REASON = "no matching FormErrors record";
 const REPROCESSING_FAILED_REASON = "reprocessing failed";
@@ -117,14 +122,19 @@ export async function retryFailedForms(req: Request, res: Response): Promise<voi
 		}),
 	);
 
-	const responseBody: RetrySettledEntry[] = settledResults.map((settledResult) => {
+	// settledResults is Promise.allSettled over `references.map(...)`, so it preserves input order:
+	// index i corresponds to references[i]. That lets us attach each reference to its result row.
+	const responseBody: RetrySettledEntry[] = settledResults.map((settledResult, index) => {
+		const applicationReference = references[index];
+
 		if (settledResult.status === "fulfilled") {
-			return { status: "fulfilled", value: settledResult.value };
+			return { status: "fulfilled", application_reference: applicationReference, value: settledResult.value };
 		}
 
-		const reason = settledResult.reason instanceof Error ? settledResult.reason.message : String(settledResult.reason);
-
-		return { status: "rejected", reason };
+		// The rejection reason is intentionally NOT included in the response: it is withheld from the
+		// caller for security/privacy reasons (it can carry validator internals or a stack trace).
+		// The reason has already been logged server-side; what to surface to callers needs more thought.
+		return { status: "rejected", application_reference: applicationReference };
 	});
 
 	res.json(responseBody);

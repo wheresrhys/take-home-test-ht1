@@ -38,13 +38,16 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — as one independent
   promise per reference inside a single `Promise.allSettled` (so one still-failing reference
   never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
-  only when ingest succeeds. Responds `200` with an array in `Promise.allSettled` shape
-  (`{status, value}` / `{status, reason}`), one entry per input reference, **preserving input
-  order**; an unmatched reference settles rejected with reason `"no matching FormErrors
-  record"` without ever calling the ingest lib or `delete`. Unexpected errors (ingest lib
-  throwing, `delete` throwing, the initial `getRecords` fetch throwing) are logged via
-  `console.error` with `application_reference`/`references` metadata but only ever surface a
-  generic reason string / `500` body to the caller — never the underlying error. Deliberately
+  only when ingest succeeds. Responds `200` with an array, one entry per input reference,
+  **preserving input order**. Each entry carries its `application_reference` plus a `status`
+  (`{status, application_reference, value}` on success / `{status, application_reference}` on
+  failure); an unmatched reference settles rejected without ever calling the ingest lib or
+  `delete`. Failure reasons are **deliberately withheld from the response** for security/privacy
+  reasons (they can leak validator internals or stack traces) — the exact failure shape a caller
+  should see still needs more thought. Unexpected errors (ingest lib throwing, `delete` throwing,
+  the initial `getRecords` fetch throwing) are logged via `console.error` with
+  `application_reference`/`references` metadata but only ever surface a `500` generic body to the
+  caller — never the underlying error. Deliberately
   **not transactional** (delete and re-ingest are separate operations, not one DB transaction)
   — a follow-up ticket specs that.
 - `src/forms/schemas/` — `ingested_schema.ts` (inbound shape), `transformed_schema.ts` (outbound shape).

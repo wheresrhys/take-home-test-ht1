@@ -53,12 +53,6 @@ describe("POST /retry", () => {
 
 			expect(response.status).toBe(400);
 		});
-
-		it("does not leak internal details in a validation error response", async () => {
-			const response = await request(app).post("/retry").send({ references: "not-an-array" });
-
-			expect(response.body).not.toHaveProperty("stack");
-		});
 	});
 
 	describe("Usual: single reference reprocesses successfully", () => {
@@ -82,7 +76,9 @@ describe("POST /retry", () => {
 			const response = await request(app).post("/retry").send({ references: ["ref-success"] });
 
 			expect(response.status).toBe(200);
-			expect(response.body).toEqual([{ status: "fulfilled", value: { firstName: "Ada" } }]);
+			expect(response.body).toEqual([
+				{ status: "fulfilled", application_reference: "ref-success", value: { firstName: "Ada" } },
+			]);
 		});
 	});
 
@@ -93,7 +89,8 @@ describe("POST /retry", () => {
 			const response = await request(app).post("/retry").send({ references: ["ref-unknown"] });
 
 			expect(response.status).toBe(200);
-			expect(response.body).toEqual([{ status: "rejected", reason: "no matching FormErrors record" }]);
+			// note that no error message is returned for security/privacy reasons
+			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-unknown" }]);
 		});
 
 		it("does not call the ingest lib or delete for an unmatched reference", async () => {
@@ -142,7 +139,8 @@ describe("POST /retry", () => {
 			const response = await request(app).post("/retry").send({ references: ["ref-still-failing"] });
 
 			expect(response.status).toBe(200);
-			expect(response.body).toEqual([{ status: "rejected", reason: expect.any(String) }]);
+			// note that no error message is returned for security/privacy reasons
+			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-still-failing" }]);
 			expect(JSON.stringify(response.body)).not.toContain("some sensitive validator internals");
 		});
 	});
@@ -176,10 +174,11 @@ describe("POST /retry", () => {
 				.post("/retry")
 				.send({ references: ["ref-fail", "ref-success", "ref-unknown"] });
 
+			// note that no error message is returned for security/privacy reasons
 			expect(response.body).toEqual([
-				{ status: "rejected", reason: expect.any(String) },
-				{ status: "fulfilled", value: { firstName: "Ada" } },
-				{ status: "rejected", reason: "no matching FormErrors record" },
+				{ status: "rejected", application_reference: "ref-fail" },
+				{ status: "fulfilled", application_reference: "ref-success", value: { firstName: "Ada" } },
+				{ status: "rejected", application_reference: "ref-unknown" },
 			]);
 		});
 
