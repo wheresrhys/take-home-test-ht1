@@ -14,7 +14,7 @@ export type IngestResult<T = TransformedFormSchema> =
 // already exists (it's the primary key, per D3). `error` is narrowed from `unknown` since
 // pg rejects with plain objects rather than a typed Error subclass we can rely on.
 function isUniqueViolationError(error: unknown): boolean {
-	return error?.code === "23505";
+	return (error as { code?: unknown } | null)?.code === "23505";
 }
 
 // Splits `name` on the last space: the final whitespace-separated token is lastName, and
