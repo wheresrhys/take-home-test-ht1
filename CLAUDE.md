@@ -23,8 +23,8 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - TypeScript, strict mode (`tsconfig.json`), target ES2022, commonjs.
 - Express 4 HTTP server.
 - Jest + ts-jest, supertest for HTTP-level tests.
-- Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema, roles and
-  app client not yet wired up (see `tasks.md`).
+- Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema and the
+  `form_ingester` role are wired up, app client not yet wired up (see `tasks.md`).
 
 ## Layout
 
@@ -41,10 +41,15 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
 - `tests/` — mirrors `src/`.
 - `db/schema/` — one `.sql` file per schema object (table, role, etc), applied by
-  `npm run db:start` in **filename-sort order** via `db/apply-schema.sh`. Prefix files with
-  a number (e.g. `01_form_ingester_role.sql`) if ordering matters. Files must be
+  `npm run db:start` in **filename-sort order** via `db/apply-schema.sh`. Prefix files if
+  ordering matters, relative to the existing uppercase-leading names (e.g.
+  `zz_FormIngesterRole.sql` runs after `Forms.sql`/`FormErrors.sql` since its grants target
+  those tables — a numeric prefix would sort *before* them instead). Files must be
   **idempotent** (`CREATE TABLE IF NOT EXISTS`, guarded `CREATE ROLE`, etc.) — every file is
   re-applied on every `db:start`, including against an already-provisioned database.
+  `zz_FormIngesterRole.sql` creates the `form_ingester` login role (no superuser/createdb/
+  createrole) the app connects as, with CRUD-only grants on `Forms`/`FormErrors` (D7 wires
+  the app's `pg` client onto it — see `tasks.md`).
 
 Providers are intentionally flaky to force real resilience/retry handling.
 
