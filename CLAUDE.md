@@ -43,7 +43,11 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — as one independent
   promise per reference inside a single `Promise.allSettled` (so one still-failing reference
   never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
-  only when ingest succeeds. Responds `200` with an array, one entry per input reference,
+  only when ingest succeeds. The re-ingest write and the `delete` for each reference run inside a
+  single `postgresClient.withTransaction` (per-reference, not batch-wide), so they commit or roll
+  back together — a failed re-ingest keeps the `FormErrors` row with no partial `Forms` state, and
+  a `delete` failure after a successful write rolls the write back too (no orphaned `Forms` row).
+  Responds `200` with an array, one entry per input reference,
   **preserving input order**. Each entry carries its `application_reference` plus a `status`
   (`{status, application_reference, value}` on success / `{status, application_reference}` on
   failure); an unmatched reference settles rejected without ever calling the ingest lib or
@@ -52,9 +56,9 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   should see still needs more thought. Unexpected errors (ingest lib throwing, `delete` throwing,
   the initial `getRecords` fetch throwing) are logged via `console.error` with
   `application_reference`/`references` metadata but only ever surface a `500` generic body to the
-  caller — never the underlying error. Deliberately
-  **not transactional** (delete and re-ingest are separate operations, not one DB transaction)
-  — a follow-up ticket specs that.
+  caller — never the underlying error. An unexpected failure from the transaction machinery itself
+  (client checkout, `BEGIN`/`COMMIT`/`ROLLBACK`) is likewise logged with `application_reference`
+  and converted to a generic rejection reason.
 - `src/forms/schemas/` — `ingested_schema.ts` (inbound shape), `transformed_schema.ts` (outbound shape).
   Note the mismatch is deliberate: snake_case→camelCase, `name`→`firstName`/`lastName`,
   `date_of_birth: string`→`dateOfBirth: Date`, gender `"other"`→`"prefer-not-to-say"`,
@@ -64,8 +68,10 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - `src/forms/examples/` — sample form JSON.
 - `src/forms/lib/validator.ts` — `validateIngestedForm`, validates unknown input against the
   generated `ingested_schema.schema.json` via Ajv.
-- `src/forms/lib/ingest.ts` — `ingestForm(data: unknown): Promise<IngestResult<{ id: string }>>`,
-  the single library entry point every ingest/retry caller hangs off, plus `transformData`
+- `src/forms/lib/ingest.ts` — `ingestForm(data: unknown, executor?: QueryExecutor):
+  Promise<IngestResult<{ id: string }>>`, the single library entry point every ingest/retry caller
+  hangs off (the optional `executor` is forwarded to `postgresClient.create` so the Forms write can
+  join a caller's transaction — `/retry` passes it, `/ingest` omits it), plus `transformData`
   (pure ingested→transformed mapping, same file). `IngestResult<T = TransformedFormSchema>` is a
   discriminated union — `{ statusCode, data: T }` on success (no `errors` key) or
   `{ statusCode, errors: string[] }` on failure (no `data` key) — so callers narrow via
@@ -89,11 +95,18 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     `postgresClient` singleton is built by calling it once at module load. Deliberately does not
     return `HttpResponse<T>` — `pg`'s `Pool` has no HTTP status to wrap. Three generic CRUD
     methods are attached onto the singleton (not exported standalone): `create<T>(tableName,
-    data)` (INSERT ... RETURNING \*), `getRecords<T>(tableName, idColumn, ids)` (SELECT ... WHERE
-    idColumn IN (...), with an early-return `[]` guard for an empty `ids` array — avoids an
-    invalid empty `IN ()`), and `delete(tableName, idColumn, id)` (DELETE ... WHERE idColumn = id;
-    rejects with an Error naming the table/idColumn/id if `rowCount` is 0 — no silent no-op).
-    All three use parameterised queries for values; `tableName`/
+    data, executor?)` (INSERT ... RETURNING \*), `getRecords<T>(tableName, idColumn, ids,
+    executor?)` (SELECT ... WHERE idColumn IN (...), with an early-return `[]` guard for an empty
+    `ids` array — avoids an invalid empty `IN ()`), and `delete(tableName, idColumn, id,
+    executor?)` (DELETE ... WHERE idColumn = id; rejects with an Error naming the table/idColumn/id
+    if `rowCount` is 0 — no silent no-op). Each takes an optional `executor` (a `QueryExecutor` —
+    anything with a `query` method, satisfied by both the `Pool` and a checked-out `PoolClient`):
+    omitted it defaults to the shared pool (unchanged behaviour, e.g. the `/ingest` path); passed a
+    transactional client it runs that query inside the transaction. `withTransaction<T>(cb)` checks
+    out a dedicated client from the pool, `BEGIN`s, runs `cb(client)`, `COMMIT`s on success /
+    `ROLLBACK`s if `cb` throws, and **always releases** the client (no leak on either path) — this
+    is what `/retry` threads through the CRUD methods to make a per-reference reprocess atomic.
+    All use parameterised queries for values; `tableName`/
     `idColumn` are only ever passed by trusted internal call sites (`Forms`/`FormErrors`), never
     from request bodies, so they're interpolated directly. `delete` is attached as an object
     property (not a `function delete` declaration) since `delete` is a reserved word as a
