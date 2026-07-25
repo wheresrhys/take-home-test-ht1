@@ -106,3 +106,69 @@ describe("postgresClient", () => {
 		expect(postgresClientModule.postgresClient).toBeInstanceOf(MockedPool);
 	});
 });
+
+describe("withTransaction", () => {
+	// Loads the module with `pg` mocked, then stubs the singleton pool's `connect` to hand back a
+	// fake client whose `query`/`release` we can assert on. postgresClient IS the pool (Object.assign),
+	// so overriding its `connect` overrides the connection withTransaction checks out.
+	function loadWithMockClient(): {
+		withTransaction: PostgresClientModule["postgresClient"]["withTransaction"];
+		client: { query: jest.Mock; release: jest.Mock };
+	} {
+		const { postgresClientModule } = loadPostgresClientModule();
+		const client = { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }), release: jest.fn() };
+		const { postgresClient } = postgresClientModule;
+		(postgresClient.connect as unknown as jest.Mock) = jest.fn().mockResolvedValue(client);
+
+		return { withTransaction: postgresClient.withTransaction, client };
+	}
+
+	it("BEGINs, COMMITs and returns the callback's result on success", async () => {
+		const { withTransaction, client } = loadWithMockClient();
+
+		const result = await withTransaction(async (executor) => {
+			expect(executor).toBe(client);
+			return "callback-result";
+		});
+
+		expect(result).toBe("callback-result");
+		expect(client.query).toHaveBeenNthCalledWith(1, "BEGIN");
+		expect(client.query).toHaveBeenNthCalledWith(2, "COMMIT");
+		expect(client.query).not.toHaveBeenCalledWith("ROLLBACK");
+	});
+
+	it("ROLLBACKs and rethrows when the callback throws", async () => {
+		const { withTransaction, client } = loadWithMockClient();
+		const callbackError = new Error("callback exploded");
+
+		await expect(
+			withTransaction(async () => {
+				throw callbackError;
+			}),
+		).rejects.toBe(callbackError);
+
+		expect(client.query).toHaveBeenCalledWith("BEGIN");
+		expect(client.query).toHaveBeenCalledWith("ROLLBACK");
+		expect(client.query).not.toHaveBeenCalledWith("COMMIT");
+	});
+
+	it("releases the client on the success path", async () => {
+		const { withTransaction, client } = loadWithMockClient();
+
+		await withTransaction(async () => undefined);
+
+		expect(client.release).toHaveBeenCalledTimes(1);
+	});
+
+	it("releases the client on the failure path", async () => {
+		const { withTransaction, client } = loadWithMockClient();
+
+		await expect(
+			withTransaction(async () => {
+				throw new Error("callback exploded");
+			}),
+		).rejects.toThrow("callback exploded");
+
+		expect(client.release).toHaveBeenCalledTimes(1);
+	});
+});

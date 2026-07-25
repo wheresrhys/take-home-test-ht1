@@ -1,6 +1,14 @@
-import { Pool, QueryResultRow } from "pg";
+import { Pool, QueryResult, QueryResultRow } from "pg";
 
 const REQUIRED_ENV_VARS = ["PGHOST", "PGPORT", "PGDATABASE", "FORM_INGESTER_DB_PASSWORD"] as const;
+
+// The minimal surface the CRUD helpers need to run a parameterised query. Satisfied by both the
+// shared `Pool` (the default, unchanged pool-query behaviour) and a checked-out transactional
+// `PoolClient` (from withTransaction), so the same query bodies run either on the pool or inside
+// a transaction depending on which executor the caller threads through.
+export interface QueryExecutor {
+	query<T extends QueryResultRow>(queryText: string, values?: unknown[]): Promise<QueryResult<T>>;
+}
 
 export const createPostgresPool = (): Pool => {
 	const missingEnvVarNames = REQUIRED_ENV_VARS.filter((envVarName) => !process.env[envVarName]);
@@ -25,7 +33,7 @@ export const createPostgresPool = (): Pool => {
 // repositories) — never sourced from request bodies — so they're interpolated directly into
 // the query text. All *values* go through as query parameters ($1, $2, ...), never concatenated.
 async function create<T extends QueryResultRow>(
-	pool: Pool,
+	executor: QueryExecutor,
 	tableName: string,
 	data: Record<string, unknown>,
 ): Promise<T> {
@@ -33,7 +41,7 @@ async function create<T extends QueryResultRow>(
 	const values = Object.values(data);
 	const placeholders = values.map((_value, index) => `$${index + 1}`).join(", ");
 
-	const { rows } = await pool.query<T>(
+	const { rows } = await executor.query<T>(
 		`INSERT INTO ${tableName} (${columnNames.join(", ")}) VALUES (${placeholders}) RETURNING *`,
 		values,
 	);
@@ -42,7 +50,7 @@ async function create<T extends QueryResultRow>(
 }
 
 async function getRecords<T extends QueryResultRow>(
-	pool: Pool,
+	executor: QueryExecutor,
 	tableName: string,
 	idColumn: string,
 	ids: (string | number)[],
@@ -54,13 +62,18 @@ async function getRecords<T extends QueryResultRow>(
 
 	const placeholders = ids.map((_id, index) => `$${index + 1}`).join(", ");
 
-	const { rows } = await pool.query<T>(`SELECT * FROM ${tableName} WHERE ${idColumn} IN (${placeholders})`, ids);
+	const { rows } = await executor.query<T>(`SELECT * FROM ${tableName} WHERE ${idColumn} IN (${placeholders})`, ids);
 
 	return rows;
 }
 
-async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id: string | number): Promise<void> {
-	const { rowCount } = await pool.query(`DELETE FROM ${tableName} WHERE ${idColumn} = $1`, [id]);
+async function deleteRecord(
+	executor: QueryExecutor,
+	tableName: string,
+	idColumn: string,
+	id: string | number,
+): Promise<void> {
+	const { rowCount } = await executor.query(`DELETE FROM ${tableName} WHERE ${idColumn} = $1`, [id]);
 
 	if (!rowCount) {
 		throw new Error(`postgres-client: delete affected 0 rows — no ${tableName} row with ${idColumn} = ${id}`);
@@ -68,9 +81,44 @@ async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id:
 }
 
 export interface PostgresClient extends Pool {
-	create<T extends QueryResultRow>(tableName: string, data: Record<string, unknown>): Promise<T>;
-	getRecords<T extends QueryResultRow>(tableName: string, idColumn: string, ids: (string | number)[]): Promise<T[]>;
-	delete(tableName: string, idColumn: string, id: string | number): Promise<void>;
+	// Each query method takes an optional `executor`: omitted (the default) it runs on the shared
+	// pool exactly as before; passed a transactional client (from withTransaction) it runs that
+	// query inside the transaction instead. The /ingest path passes nothing, so it is unchanged.
+	create<T extends QueryResultRow>(
+		tableName: string,
+		data: Record<string, unknown>,
+		executor?: QueryExecutor,
+	): Promise<T>;
+	getRecords<T extends QueryResultRow>(
+		tableName: string,
+		idColumn: string,
+		ids: (string | number)[],
+		executor?: QueryExecutor,
+	): Promise<T[]>;
+	delete(tableName: string, idColumn: string, id: string | number, executor?: QueryExecutor): Promise<void>;
+	// Runs `callback` inside a single transaction on a dedicated client checked out from the pool:
+	// BEGIN, then `callback(client)` (the client is the executor to thread into the CRUD methods),
+	// COMMIT on success or ROLLBACK if it throws, and the client is ALWAYS released afterwards.
+	withTransaction<T>(callback: (executor: QueryExecutor) => Promise<T>): Promise<T>;
+}
+
+// Checks out a dedicated client so BEGIN/COMMIT/ROLLBACK all run on the same connection (pool-level
+// queries would each grab an arbitrary connection, defeating the transaction). The client is
+// released in a `finally` so a leak can't happen on either the success or the failure path.
+async function withTransaction<T>(pool: Pool, callback: (executor: QueryExecutor) => Promise<T>): Promise<T> {
+	const client = await pool.connect();
+
+	try {
+		await client.query("BEGIN");
+		const result = await callback(client);
+		await client.query("COMMIT");
+		return result;
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	} finally {
+		client.release();
+	}
 }
 
 // Singleton pool, built once at module load, with create/getRecords/delete query methods
@@ -80,9 +128,15 @@ export interface PostgresClient extends Pool {
 const pool = createPostgresPool();
 
 export const postgresClient: PostgresClient = Object.assign(pool, {
-	create: <T extends QueryResultRow>(tableName: string, data: Record<string, unknown>) =>
-		create<T>(pool, tableName, data),
-	getRecords: <T extends QueryResultRow>(tableName: string, idColumn: string, ids: (string | number)[]) =>
-		getRecords<T>(pool, tableName, idColumn, ids),
-	delete: (tableName: string, idColumn: string, id: string | number) => deleteRecord(pool, tableName, idColumn, id),
+	create: <T extends QueryResultRow>(tableName: string, data: Record<string, unknown>, executor: QueryExecutor = pool) =>
+		create<T>(executor, tableName, data),
+	getRecords: <T extends QueryResultRow>(
+		tableName: string,
+		idColumn: string,
+		ids: (string | number)[],
+		executor: QueryExecutor = pool,
+	) => getRecords<T>(executor, tableName, idColumn, ids),
+	delete: (tableName: string, idColumn: string, id: string | number, executor: QueryExecutor = pool) =>
+		deleteRecord(executor, tableName, idColumn, id),
+	withTransaction: <T>(callback: (executor: QueryExecutor) => Promise<T>) => withTransaction<T>(pool, callback),
 });
