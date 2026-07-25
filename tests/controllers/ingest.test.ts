@@ -89,4 +89,30 @@ describe("POST /ingest", () => {
 			);
 		});
 	});
+
+	describe("when create() rejects with a unique-violation on application_reference", () => {
+		beforeEach(() => {
+			mockedCreate.mockRejectedValue({ code: "23505" });
+		});
+
+		it("responds 409", async () => {
+			const response = await postIngest(buildIngestedForm());
+
+			expect(response.status).toBe(409);
+		});
+
+		it("does not leak DB internals in the response body", async () => {
+			const response = await postIngest(buildIngestedForm());
+
+			const serializedBody = JSON.stringify(response.body);
+			expect(serializedBody).not.toMatch(/detail|stack|23505|sql/i);
+		});
+
+		it("does not write a FormErrors record for a duplicate", async () => {
+			await postIngest(buildIngestedForm());
+
+			expect(mockedCreate).toHaveBeenCalledTimes(1);
+			expect(mockedCreate).not.toHaveBeenCalledWith("formerrors", expect.anything());
+		});
+	});
 });
