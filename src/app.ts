@@ -11,6 +11,7 @@ const app = express();
 app.use(express.json());
 
 app.post("/ingest", asyncHandler(ingestFormController));
+app.post("/retry", asyncHandler(retryFailedForms));
 
 // Reads application_reference off the parsed ingested-form body, defensively — the error being
 // handled might be a JSON parse failure or occur before validation, so req.body's shape is never
@@ -65,6 +66,6 @@ app.use(async (err: unknown, req: Request, res: Response, next: NextFunction): P
 	res.status(500).json({ message: "Something went wrong processing your request" });
 });
 
-app.post("/retry", retryFailedForms);
+
 
 export default app;
