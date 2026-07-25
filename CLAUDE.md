@@ -23,7 +23,8 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - TypeScript, strict mode (`tsconfig.json`), target ES2022, commonjs.
 - Express 4 HTTP server.
 - Jest + ts-jest, supertest for HTTP-level tests.
-- Postgres planned (see `tasks.md`) — not yet wired up.
+- Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema, roles and
+  app client not yet wired up (see `tasks.md`).
 
 ## Layout
 
@@ -53,6 +54,8 @@ Providers are intentionally flaky to force real resilience/retry handling.
 - `npm run build` — tsc → `dist/`.
 - `npm start` — run built server.
 - `npm test` — jest.
+- `npm run db:start` — install Docker, then run this to provision a local Postgres via
+  Docker Compose, using the throwaway dev credentials committed in `.env.local`.
 
 ## Working agreements
 
