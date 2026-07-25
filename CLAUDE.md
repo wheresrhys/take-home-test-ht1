@@ -32,6 +32,8 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   Note the mismatch is deliberate: snake_case→camelCase, `name`→`firstName`/`lastName`,
   `date_of_birth: string`→`dateOfBirth: Date`, gender `"other"`→`"prefer-not-to-say"`,
   address flattened, lat/long added.
+  `ingested_schema.schema.json` is generated, not hand-written — see Conventions below for the
+  workflow to change it.
 - `src/forms/examples/` — sample form JSON.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
@@ -46,6 +48,9 @@ Providers are intentionally flaky to force real resilience/retry handling.
 - Named exports for provider functions; default export for the app.
 - Provider calls are async and return `HttpResponse<T>` — check `statusCode`, don't throw.
 - Long descriptive names.
+- Changing the ingested schema: (1) edit the `IngestedFormSchema` type in `ingested_schema.ts`,
+  (2) run `npm run generate:schema` to regenerate `ingested_schema.schema.json`, (3) update the
+  affected tests. Don't hand-edit the generated `.schema.json` file.
 
 ## Scripts
 
