@@ -23,8 +23,9 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - TypeScript, strict mode (`tsconfig.json`), target ES2022, commonjs.
 - Express 4 HTTP server.
 - Jest + ts-jest, supertest for HTTP-level tests.
-- Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema and the
-  `form_ingester` role are wired up, app client not yet wired up (see `tasks.md`).
+- Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema, the
+  `form_ingester` role, and the app's `pg` connection pool (`src/providers/postgres-client.ts`)
+  are wired up; query methods (`create`/`getRecords`/`delete`) not yet attached (see `tasks.md`).
 
 ## Layout
 
@@ -49,6 +50,12 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
+  - `postgres-client.ts` — `createPostgresPool()` builds a `pg` `Pool` from `PGHOST`/`PGPORT`/
+    `PGDATABASE`/`FORM_INGESTER_DB_PASSWORD` (throws naming every missing/empty var, never the
+    password value); `user` is hardcoded to `"form_ingester"` in code, never read from env. The
+    `postgresClient` singleton is built by calling it once at module load. Deliberately does not
+    return `HttpResponse<T>` — `pg`'s `Pool` has no HTTP status to wrap. Query methods
+    (`create`/`getRecords`/`delete`) attach onto this in a later ticket.
 - `tests/` — mirrors `src/`.
 - `db/schema/` — one `.sql` file per schema object (table, role, etc), applied by
   `npm run db:start` in **filename-sort order** via `db/apply-schema.sh`. Prefix files if
@@ -58,8 +65,8 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   **idempotent** (`CREATE TABLE IF NOT EXISTS`, guarded `CREATE ROLE`, etc.) — every file is
   re-applied on every `db:start`, including against an already-provisioned database.
   `zz_FormIngesterRole.sql` creates the `form_ingester` login role (no superuser/createdb/
-  createrole) the app connects as, with CRUD-only grants on `Forms`/`FormErrors` (D7 wires
-  the app's `pg` client onto it — see `tasks.md`).
+  createrole) the app connects as, with CRUD-only grants on `Forms`/`FormErrors` — the app's
+  `pg` client (`src/providers/postgres-client.ts`) is hardcoded to connect as this role.
 
 Providers are intentionally flaky to force real resilience/retry handling.
 
