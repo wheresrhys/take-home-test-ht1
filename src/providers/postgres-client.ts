@@ -60,7 +60,11 @@ async function getRecords<T extends QueryResultRow>(
 }
 
 async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id: string | number): Promise<void> {
-	await pool.query(`DELETE FROM ${tableName} WHERE ${idColumn} = $1`, [id]);
+	const { rowCount } = await pool.query(`DELETE FROM ${tableName} WHERE ${idColumn} = $1`, [id]);
+
+	if (!rowCount) {
+		throw new Error(`postgres-client: delete affected 0 rows — no ${tableName} row with ${idColumn} = ${id}`);
+	}
 }
 
 export interface PostgresClient extends Pool {

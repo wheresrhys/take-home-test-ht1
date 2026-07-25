@@ -58,8 +58,9 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     methods are attached onto the singleton (not exported standalone): `create<T>(tableName,
     data)` (INSERT ... RETURNING \*), `getRecords<T>(tableName, idColumn, ids)` (SELECT ... WHERE
     idColumn IN (...), with an early-return `[]` guard for an empty `ids` array — avoids an
-    invalid empty `IN ()`), and `delete(tableName, idColumn, id)` (DELETE ... WHERE idColumn = id,
-    a no-op if nothing matches). All three use parameterised queries for values; `tableName`/
+    invalid empty `IN ()`), and `delete(tableName, idColumn, id)` (DELETE ... WHERE idColumn = id;
+    rejects with an Error naming the table/idColumn/id if `rowCount` is 0 — no silent no-op).
+    All three use parameterised queries for values; `tableName`/
     `idColumn` are only ever passed by trusted internal call sites (`Forms`/`FormErrors`), never
     from request bodies, so they're interpolated directly. `delete` is attached as an object
     property (not a `function delete` declaration) since `delete` is a reserved word as a

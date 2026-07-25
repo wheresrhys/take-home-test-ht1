@@ -185,17 +185,20 @@ describe("postgresClient.delete", () => {
 		await postgresClient.create("forms", buildFormsRow("delete-test-existing"));
 
 		await postgresClient.delete("forms", "application_reference", "delete-test-existing");
+		// Deleted here already — unregister so afterEach's own teardown delete doesn't
+		// re-attempt it and reject on the now-nonexistent row.
+		createdFormsReferences.delete("delete-test-existing");
 
 		const results = await postgresClient.getRecords("forms", "application_reference", ["delete-test-existing"]);
 		expect(results).toEqual([]);
 	});
 
-	it("resolves without throwing for a non-existent id, leaving other rows untouched", async () => {
+	it("rejects for a non-existent id, leaving other rows untouched", async () => {
 		await postgresClient.create("forms", buildFormsRow("delete-test-untouched"));
 
 		await expect(
 			postgresClient.delete("forms", "application_reference", "delete-test-does-not-exist"),
-		).resolves.toBeUndefined();
+		).rejects.toThrow(/delete-test-does-not-exist/);
 
 		const results = await postgresClient.getRecords("forms", "application_reference", ["delete-test-untouched"]);
 		expect(results).toHaveLength(1);
