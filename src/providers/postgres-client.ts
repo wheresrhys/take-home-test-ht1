@@ -19,3 +19,7 @@ export const createPostgresPool = (): Pool => {
 		password: process.env.FORM_INGESTER_DB_PASSWORD,
 	});
 };
+
+// Singleton pool, built once at module load. D8 attaches create/getRecords/delete query
+// methods onto this via postgresClient.query(...).
+export const postgresClient: Pool = createPostgresPool();
