@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {},
+  "properties": {
+    "address": {
+      "additionalProperties": false,
+      "properties": {
+        "address_line_1": {
+          "type": "string"
+        },
+        "address_line_2": {
+          "type": "string"
+        },
+        "address_line_3": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "address_line_1",
+        "address_line_2",
+        "postcode",
+        "country"
+      ],
+      "type": "object"
+    },
+    "application_reference": {
+      "type": "string"
+    },
+    "date_of_birth": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "gender": {
+      "enum": [
+        "male",
+        "female",
+        "other"
+      ],
+      "type": "string"
+    },
+    "mobile_number": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "phone_number": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "application_reference",
+    "name",
+    "email",
+    "gender",
+    "date_of_birth",
+    "mobile_number",
+    "address"
+  ],
+  "type": "object"
+}
