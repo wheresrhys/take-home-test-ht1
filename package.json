@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "DOTENV_CONFIG_PATH=.env.local node -r dotenv/config dist/index.js",
     "dev": "DOTENV_CONFIG_PATH=.env.local ts-node-dev --respawn -r dotenv/config src/index.ts",
-    "test": "jest"
+    "test": "jest",
+    "db:start": "docker compose --env-file .env.local up -d"
   },
   "keywords": [],
   "license": "ISC",

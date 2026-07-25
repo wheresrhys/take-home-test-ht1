@@ -17,6 +17,11 @@ Some additional notes on the system
 - We should never give the FORM-BOT the same form twice
 - If the transform is successful, we should send a guaranteed email to our team happyforms@bots.com that a form was ingested
 
+Local development
+- Install [Docker](https://docs.docker.com/get-docker/).
+- Run `npm run db:start` to provision a local Postgres via Docker Compose, using the
+  throwaway dev credentials committed in `.env.local`.
+
 Some notes on this take home
 - We expect you to add some basic tests to your code
 - We expect you to use an actual database, as we'd like to see your schema design
