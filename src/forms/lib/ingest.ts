@@ -75,7 +75,7 @@ export async function ingestForm(data: unknown): Promise<IngestResult<{ id: stri
 
 	if (!validationResult.valid) {
 		await postgresClient.create("formerrors", {
-			application_reference: extractApplicationReference(data),
+			application_reference: data.application_reference ? String(data.application_reference) : null,
 			form_content: data,
 			schema_errors: validationResult.errors,
 			runtime_errors: null,
