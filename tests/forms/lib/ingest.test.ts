@@ -142,11 +142,18 @@ describe("transformData", () => {
 		expect(result.applicationReference).toBe("GRU-123089-2026");
 	});
 
-	it("splits name into firstName and lastName on the first space", () => {
-		const result = transformData(buildValidIngestedForm({ name: "John Middle Doe" }), GEOCODE_RESULT);
+	it("splits name into firstName and lastName on the last space", () => {
+		const result = transformData(buildValidIngestedForm({ name: "John Doe" }), GEOCODE_RESULT);
 
 		expect(result.firstName).toBe("John");
-		expect(result.lastName).toBe("Middle Doe");
+		expect(result.lastName).toBe("Doe");
+	});
+
+	it("treats a 3-part name's last token as lastName, allowing spaces in firstName", () => {
+		const result = transformData(buildValidIngestedForm({ name: "Mary Jane Watson" }), GEOCODE_RESULT);
+
+		expect(result.firstName).toBe("Mary Jane");
+		expect(result.lastName).toBe("Watson");
 	});
 
 	it("passes gender 'male' straight through", () => {

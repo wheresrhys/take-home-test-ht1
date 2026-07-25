@@ -10,18 +10,20 @@ export type IngestResult<T = TransformedFormSchema> =
 	| { statusCode: number; data: T }
 	| { statusCode: number; errors: string[] };
 
-// Splits `name` on the first space: text before the first space is firstName, the
-// remainder is lastName (empty string when there's no space, e.g. a single-word name).
+// Splits `name` on the last space: the final whitespace-separated token is lastName, and
+// everything before it is firstName (so firstName may itself contain spaces, e.g. a
+// 3-part name like "Mary Jane Watson" -> firstName "Mary Jane", lastName "Watson").
+// lastName is an empty string when there's no space, e.g. a single-word name.
 function splitName(name: string): { firstName: string; lastName: string } {
-	const firstSpaceIndex = name.indexOf(" ");
+	const lastSpaceIndex = name.lastIndexOf(" ");
 
-	if (firstSpaceIndex === -1) {
+	if (lastSpaceIndex === -1) {
 		return { firstName: name, lastName: "" };
 	}
 
 	return {
-		firstName: name.slice(0, firstSpaceIndex),
-		lastName: name.slice(firstSpaceIndex + 1),
+		firstName: name.slice(0, lastSpaceIndex),
+		lastName: name.slice(lastSpaceIndex + 1),
 	};
 }
 
