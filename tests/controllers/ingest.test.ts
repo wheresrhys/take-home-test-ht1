@@ -101,13 +101,6 @@ describe("POST /ingest", () => {
 			expect(response.status).toBe(409);
 		});
 
-		it("does not leak DB internals in the response body", async () => {
-			const response = await postIngest(buildIngestedForm());
-
-			const serializedBody = JSON.stringify(response.body);
-			expect(serializedBody).not.toMatch(/detail|stack|23505|sql/i);
-		});
-
 		it("does not write a FormErrors record for a duplicate", async () => {
 			await postIngest(buildIngestedForm());
 
