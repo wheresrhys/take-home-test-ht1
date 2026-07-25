@@ -33,7 +33,10 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `src/index.ts` — server bootstrap (`PORT`, default 3000).
 - `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm`, maps
   the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`, narrowing
-  via `'data' in result`). No validation/geocode/transform/persist logic lives here.
+  via `'data' in result`). No validation/geocode/transform/persist logic lives here. On a failure
+  result the response body is a fixed, generic `{ message: string }` — the lib's `errors` array
+  is deliberately dropped here, never forwarded to the caller (no validator diagnostics, no raw
+  submitted data).
 - `src/forms/schemas/` — `ingested_schema.ts` (inbound shape), `transformed_schema.ts` (outbound shape).
   Note the mismatch is deliberate: snake_case→camelCase, `name`→`firstName`/`lastName`,
   `date_of_birth: string`→`dateOfBirth: Date`, gender `"other"`→`"prefer-not-to-say"`,
@@ -49,11 +52,18 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   discriminated union — `{ statusCode, data: T }` on success (no `errors` key) or
   `{ statusCode, errors: string[] }` on failure (no `data` key) — so callers narrow via
   `'data' in result` / `'errors' in result` rather than checking whether `errors` is
-  undefined/empty. Happy path (I3): I1 validation (400 + validator messages on failure) →
-  `idealpostcodes.lookupPostcode` on the postcode → `transformData` → `postgresClient.create
-  ("forms", transformedRow)` → `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`.
-  Geocode-failure handling, duplicate/conflict handling, and error-handling middleware land in
-  later tickets (I5/I6) — this lib currently assumes `lookupPostcode` succeeds.
+  undefined/empty. Happy path (I3): I1 validation → `idealpostcodes.lookupPostcode` on the
+  postcode → `transformData` → `postgresClient.create("forms", transformedRow)` →
+  `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`. Schema-invalid path
+  (I4): on I1 validator failure, before returning `{ statusCode: 400, errors }`, writes a
+  `FormErrors` row via `postgresClient.create("formerrors", { application_reference, form_content,
+  schema_errors, runtime_errors: null })` — `form_content` is the raw submitted `data` unmodified,
+  `schema_errors` is the validator's error array, and `application_reference` is defensively
+  extracted from the unvalidated payload (`null` if missing/not a string) so the row is written
+  even when validation itself failed on that field — captured so the record can be fixed and
+  replayed via `/retry` (R1) after a deploy. Geocode-failure handling, duplicate/conflict
+  handling, and error-handling middleware land in later tickets (I5/I6) — this lib currently
+  assumes `lookupPostcode` succeeds.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
