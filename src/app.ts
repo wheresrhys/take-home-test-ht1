@@ -1,4 +1,6 @@
-import express, { Request, Response } from "express";
+import express from "express";
+
+import { ingestFormController } from "./controllers/ingest";
 
 import { retryFailedForms } from "./controllers/retry";
 
@@ -6,9 +8,7 @@ const app = express();
 
 app.use(express.json());
 
-app.post("/ingest", (req: Request, res: Response) => {
-	res.json({ message: "Ingesting form data" });
-});
+app.post("/ingest", ingestFormController);
 
 app.post("/retry", retryFailedForms);
 

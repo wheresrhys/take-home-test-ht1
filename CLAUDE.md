@@ -29,7 +29,12 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 
 ## Layout
 
-- `src/app.ts` — Express app + routes. `src/index.ts` — server bootstrap (`PORT`, default 3000).
+- `src/app.ts` — Express app + routes; `POST /ingest` is wired to `src/controllers/ingest.ts`,
+  `POST /retry` is wired to `src/controllers/retry.ts`. `src/index.ts` — server bootstrap
+  (`PORT`, default 3000).
+- `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm`, maps
+  the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`, narrowing
+  via `'data' in result`). No validation/geocode/transform/persist logic lives here.
 - `src/controllers/retry.ts` — `retryFailedForms`, wired up as `POST /retry`. Accepts
   `{ references: string[] }` (each a `FormErrors.application_reference`); `400` on any other
   shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
@@ -59,14 +64,17 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - `src/forms/examples/` — sample form JSON.
 - `src/forms/lib/validator.ts` — `validateIngestedForm`, validates unknown input against the
   generated `ingested_schema.schema.json` via Ajv.
-- `src/forms/lib/ingest.ts` — `ingestForm(data: unknown): Promise<IngestResult>`, the single
-  library entry point every ingest/retry caller hangs off. `IngestResult<T = TransformedFormSchema>`
-  is a discriminated union — `{ statusCode, data: T }` on success (no `errors` key) or
+- `src/forms/lib/ingest.ts` — `ingestForm(data: unknown): Promise<IngestResult<{ id: string }>>`,
+  the single library entry point every ingest/retry caller hangs off, plus `transformData`
+  (pure ingested→transformed mapping, same file). `IngestResult<T = TransformedFormSchema>` is a
+  discriminated union — `{ statusCode, data: T }` on success (no `errors` key) or
   `{ statusCode, errors: string[] }` on failure (no `data` key) — so callers narrow via
   `'data' in result` / `'errors' in result` rather than checking whether `errors` is
-  undefined/empty. Currently only wires up I1 validation (400 + validator messages on failure,
-  placeholder 200 echoing the validated input on success); geocode/transform/persist land in a
-  later ticket.
+  undefined/empty. Happy path (I3): I1 validation (400 + validator messages on failure) →
+  `idealpostcodes.lookupPostcode` on the postcode → `transformData` → `postgresClient.create
+  ("forms", transformedRow)` → `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`.
+  Geocode-failure handling, duplicate/conflict handling, and error-handling middleware land in
+  later tickets (I5/I6) — this lib currently assumes `lookupPostcode` succeeds.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
@@ -87,7 +95,9 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     standalone identifier but a valid property key. None of the three catch/transform `pg`
     errors — callers (ingest/retry) branch on error shape (e.g. `error.code === '23505'` for a
     primary-key conflict).
-- `tests/` — mirrors `src/`. `tests/providers/postgres-client.test.ts` unit-tests
+- `tests/` — mirrors `src/`. `tests/controllers/ingest.test.ts` is the BDD/supertest suite for
+  `POST /ingest`, mocking `idealpostcodes.lookupPostcode` and the db client's `create` — no real
+  network/DB. `tests/providers/postgres-client.test.ts` unit-tests
   `createPostgresPool()`/the singleton with `pg` mocked; `tests/providers/postgres-client-crud.test.ts`
   integration-tests `create`/`getRecords`/`delete` against the real docker DB (kept in a separate
   file since the two approaches — mocked vs real `pg` — can't coexist in one jest file once `pg`
