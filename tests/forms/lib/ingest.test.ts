@@ -77,7 +77,8 @@ describe("ingestForm", () => {
 		await ingestForm(validForm);
 
 		expect(mockedLookupPostcode).toHaveBeenCalledWith(validForm.address.postcode);
-		expect(mockedCreate).toHaveBeenCalledWith("forms", transformData(validForm, GEOCODE_RESULT));
+		// The /ingest path passes no executor, so create runs on the shared pool (its own default).
+		expect(mockedCreate).toHaveBeenCalledWith("forms", transformData(validForm, GEOCODE_RESULT), undefined);
 	});
 
 	describe("when create() rejects with a unique-violation on application_reference", () => {

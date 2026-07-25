@@ -2,7 +2,7 @@ import { validateIngestedForm } from "./validator";
 import { IngestedFormSchema } from "../schemas/ingested_schema";
 import { TransformedFormSchema } from "../schemas/transformed_schema";
 import { lookupPostcode } from "../../providers/idealpostcodes";
-import { postgresClient } from "../../providers/postgres-client";
+import { postgresClient, QueryExecutor } from "../../providers/postgres-client";
 
 // Discriminated union: success and failure are mutually exclusive at the type level.
 // A success result never carries `errors`; a failure result never carries `data`.
@@ -63,7 +63,10 @@ export function transformData(
 	};
 }
 
-export async function ingestForm(data: unknown): Promise<IngestResult<{ id: string }>> {
+// `executor` is optional: /ingest calls it without one, so the Forms write runs on the shared
+// pool exactly as before. /retry passes the transaction's client so the write joins the same
+// transaction as the FormErrors delete, making the reprocess atomic.
+export async function ingestForm(data: unknown, executor?: QueryExecutor): Promise<IngestResult<{ id: string }>> {
 	const validationResult = validateIngestedForm(data);
 
 	if (!validationResult.valid) {
@@ -80,7 +83,7 @@ export async function ingestForm(data: unknown): Promise<IngestResult<{ id: stri
 	const transformedRow = transformData(validatedForm, geo);
 
 	try {
-		await postgresClient.create("forms", transformedRow);
+		await postgresClient.create("forms", transformedRow, executor);
 	} catch (error) {
 		// A duplicate delivery (provider sends at-least-once, per README) is expected, not a
 		// failure to retry — short-circuit to 409 without writing a FormErrors record

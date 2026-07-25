@@ -86,6 +86,8 @@ describe("POST /ingest", () => {
 					longitude: GEOCODE_RESULT.longitude,
 					latitude: GEOCODE_RESULT.latitude,
 				}),
+				// /ingest passes no executor — create defaults to the shared pool.
+				undefined,
 			);
 		});
 	});
