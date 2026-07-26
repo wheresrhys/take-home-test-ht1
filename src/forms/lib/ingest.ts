@@ -44,33 +44,6 @@ function splitName(name: string): { firstName: string; lastName: string } {
 	};
 }
 
-// Maps the camelCase transformed_schema shape (the outbound domain representation) onto the
-// snake_case column names of the `forms` table. transformData deliberately yields the API shape;
-// this is the persistence boundary that adapts it to the DB. Without it, create() would build
-// `INSERT INTO forms (sessionId, ...)`, whose unquoted identifiers fold to `sessionid` — a column
-// that doesn't exist — so a real insert fails. postgresClient.create takes column-name keys
-// verbatim (see tests/providers/postgres-client-crud.test.ts), so the keys here are snake_case.
-export function toFormsRow(form: TransformedFormSchema): Record<string, unknown> {
-	return {
-		session_id: form.sessionId,
-		application_reference: form.applicationReference,
-		first_name: form.firstName,
-		last_name: form.lastName,
-		email: form.email,
-		gender: form.gender,
-		date_of_birth: form.dateOfBirth,
-		phone_number: form.phoneNumber,
-		mobile_number: form.mobileNumber,
-		address_line_1: form.addressLine1,
-		address_line_2: form.addressLine2,
-		address_line_3: form.addressLine3,
-		postcode: form.postcode,
-		country: form.country,
-		longitude: form.longitude,
-		latitude: form.latitude,
-	};
-}
-
 // Pure mapping from the inbound ingested_schema shape to the outbound transformed_schema
 // shape — no I/O. Geocode coordinates are supplied by the caller (ingestForm), since
 // looking up the postcode is the only part of this transform that isn't pure data mapping.
@@ -128,7 +101,7 @@ export async function ingestForm(data: unknown): Promise<IngestResult<{ id: stri
 	const transformedRow = transformData(validatedForm, geo);
 
 	try {
-		await postgresClient.create("forms", toFormsRow(transformedRow));
+		await postgresClient.create("forms", transformedRow);
 	} catch (error) {
 		// A duplicate delivery (provider sends at-least-once, per README) is expected, not a
 		// failure to retry — short-circuit to 409 without writing a FormErrors record
