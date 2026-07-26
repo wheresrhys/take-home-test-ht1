@@ -328,6 +328,12 @@ describe("POST /ingest", () => {
 			expect(response.status).toBe(409);
 		});
 
+		it("responds with a generic conflict message that never names the duplicated reference", async () => {
+			const response = await postIngest(buildIngestedForm());
+
+			expect(response.body).toEqual({ message: "The submitted form could not be processed due to a conflict." });
+		});
+
 		it("does not write a FormErrors record for a duplicate", async () => {
 			await postIngest(buildIngestedForm());
 

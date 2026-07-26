@@ -90,6 +90,15 @@ describe("ingestForm", () => {
 			expect(result.statusCode).toBe(409);
 			expect("data" in result).toBe(false);
 		});
+
+		it("does not name application_reference in the 409 errors (no duplicate-reference leak)", async () => {
+			mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
+			mockedCreate.mockRejectedValue({ code: "23505" });
+
+			const result = await ingestForm(buildValidIngestedForm());
+
+			expect("errors" in result && result.errors.join(" ")).not.toMatch(/application_reference/);
+		});
 	});
 
 	describe("when create() rejects with a non-conflict error", () => {

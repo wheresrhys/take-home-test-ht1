@@ -49,7 +49,9 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   narrowing via `'data' in result`). No validation/geocode/transform/persist/email logic lives
   here. On a failure result the response body is a fixed, generic `{ message: string }` — the
   lib's `errors` array is deliberately dropped here, never forwarded to the caller (no validator
-  diagnostics, no raw submitted data).
+  diagnostics, no raw submitted data). A `409` gets its own dedicated generic **conflict** message
+  (`CONFLICT_MESSAGE`), distinct from the `400`/other schema-invalid message; it never names
+  `application_reference` or reveals the form is a duplicate (security).
 - `src/controllers/retry.ts` — `retryFailedForms`, wired up as `POST /retry`. Accepts
   `{ references: string[] }` (each a `FormErrors.applicationReference`); `400` on any other
   shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
@@ -116,8 +118,10 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   deploy. Duplicate handling (I5): a `create()` rejection is checked with the colocated
   `isUniqueViolationError(error)` (matches Postgres unique-violation code `23505`, raised on a
   repeat `Forms.applicationReference` — the PK, per D3); on a match, `ingestForm` short-circuits
-  to `{ statusCode: 409, errors: [...] }` without writing a `FormErrors` record (a duplicate
-  delivery is expected, not a failure to retry) and without leaking the raw pg error. Any other
+  to `{ statusCode: 409, errors: ["conflict"] }` (a deliberately generic reason that never names
+  `application_reference` — even though callers drop this array, it must not confirm the reference
+  exists if it ever leaked) without writing a `FormErrors` record (a duplicate delivery is
+  expected, not a failure to retry) and without leaking the raw pg error. Any other
   rejection is rethrown unchanged, caught by the `app.ts` error-handling middleware (I6). Geocode
   failure handling remains a later ticket — this lib currently assumes `lookupPostcode` succeeds.
   Confirmation email (I7): `ingestForm` takes a 2nd `options` param, currently just

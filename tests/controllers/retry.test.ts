@@ -203,13 +203,13 @@ describe("POST /retry", () => {
 		it("Structure: a non-400 failure sets runtimeErrors and clears schemaErrors", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-duplicate", { id: 8 });
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
-			mockedIngestForm.mockResolvedValue({ statusCode: 409, errors: ["duplicate application_reference"] });
+			mockedIngestForm.mockResolvedValue({ statusCode: 409, errors: ["conflict"] });
 			mockedUpdate.mockResolvedValue(formErrorRecord);
 
 			await request(app).post("/retry").send({ references: ["ref-duplicate"] });
 
 			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 8, {
-				runtimeErrors: JSON.stringify(["duplicate application_reference"]),
+				runtimeErrors: JSON.stringify(["conflict"]),
 				schemaErrors: null,
 			});
 		});
