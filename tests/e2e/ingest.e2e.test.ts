@@ -190,4 +190,59 @@ describe("POST /ingest (e2e, real test db)", () => {
 			expect(rows).toHaveLength(1);
 		});
 	});
+
+	describe("Structure: schema validation failure", () => {
+		it("returns 400 without leaking internal error details", async () => {
+			const invalidForm = buildIngestedForm({ email: undefined });
+
+			const response = await postIngest(invalidForm);
+
+			expect(response.status).toBe(400);
+			expect(response.body).toEqual({ message: expect.any(String) });
+			expect(Object.keys(response.body)).toEqual(["message"]);
+		});
+
+		it("writes a FormErrors row with schema_errors populated", async () => {
+			const invalidForm = buildIngestedForm({ email: undefined });
+
+			await postIngest(invalidForm);
+			const rows = await getFormErrorsRows(invalidForm.application_reference as string);
+
+			expect(rows).toHaveLength(1);
+			// schema_errors is a JSONB column; node-pg parses it back to the JS array persisted.
+			expect(Array.isArray(rows[0].schema_errors)).toBe(true);
+			expect(rows[0].schema_errors as unknown[]).not.toHaveLength(0);
+		});
+
+		it("leaves runtime_errors blank on that FormErrors row", async () => {
+			const invalidForm = buildIngestedForm({ email: undefined });
+
+			await postIngest(invalidForm);
+			const rows = await getFormErrorsRows(invalidForm.application_reference as string);
+
+			expect(rows).toHaveLength(1);
+			expect(rows[0].runtime_errors).toBeNull();
+		});
+
+		it("does not create a Forms row", async () => {
+			const invalidForm = buildIngestedForm({ email: undefined });
+
+			await postIngest(invalidForm);
+			const rows = await getFormsRows(invalidForm.application_reference as string);
+
+			expect(rows).toHaveLength(0);
+		});
+	});
+
+	describe("Edge: application_reference present but another field invalid", () => {
+		it("records application_reference on the FormErrors row when present in the invalid payload", async () => {
+			const invalidForm = buildIngestedForm({ gender: "not-a-valid-gender" });
+
+			await postIngest(invalidForm);
+			const rows = await getFormErrorsRows(invalidForm.application_reference as string);
+
+			expect(rows).toHaveLength(1);
+			expect(rows[0].application_reference).toBe(invalidForm.application_reference);
+		});
+	});
 });
