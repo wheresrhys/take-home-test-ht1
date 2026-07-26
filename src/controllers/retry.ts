@@ -100,6 +100,7 @@ async function reprocessFormErrorRecord(applicationReference: string, formErrorR
 }
 
 export async function retryFailedForms(req: Request, res: Response): Promise<void> {
+
 	const { body } = req;
 
 	if (!isRetryRequestBody(body)) {

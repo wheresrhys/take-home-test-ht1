@@ -127,7 +127,7 @@ export async function ingestForm(
 		await postgresClient.create("formerrors", {
 			applicationReference: extractApplicationReference(data),
 			formContent: JSON.stringify(data),
-			schemaErrors: JSON.stringify(validationResult.errors),
+			schemaErrors: validationResult.errors,
 			runtimeErrors: null,
 		});
 
@@ -154,7 +154,6 @@ export async function ingestForm(
 
 		throw error;
 	}
-
 	if (options.sendConfirmationEmail) {
 		sendConfirmationEmailBestEffort(transformedRow.applicationReference);
 	}

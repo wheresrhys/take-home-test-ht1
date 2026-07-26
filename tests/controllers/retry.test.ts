@@ -374,7 +374,7 @@ describe("POST /retry", () => {
 		it("Usual: sends a confirmation email via sendgrid to happyforms@bots.com when a retried form ingests successfully", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-success", {
 				id: 20,
-				form_content: buildValidIngestedFormContent(),
+				formContent: buildValidIngestedFormContent(),
 			});
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedDelete.mockResolvedValue(undefined);
@@ -387,7 +387,7 @@ describe("POST /retry", () => {
 		it("Structure: does not send a confirmation email when the retried form still fails validation", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-still-failing", {
 				id: 21,
-				form_content: buildValidIngestedFormContent({ email: undefined }),
+				formContent: buildValidIngestedFormContent({ email: undefined }),
 			});
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedUpdate.mockResolvedValue(formErrorRecord);

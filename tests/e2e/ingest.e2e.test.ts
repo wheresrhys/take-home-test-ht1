@@ -27,18 +27,18 @@ const mockedLookupPostcode = lookupPostcode as jest.MockedFunction<typeof lookup
 const GEOCODE_RESULT = { latitude: -5.05, longitude: 50.05 };
 
 interface FormsRow {
-	session_id: string;
-	application_reference: string;
-	first_name: string;
-	last_name: string;
+	sessionId: string;
+	applicationReference: string;
+	firstName: string;
+ 	lastName: string;
 	email: string;
 	gender: string;
-	date_of_birth: Date;
-	phone_number: string | null;
-	mobile_number: string;
-	address_line_1: string;
-	address_line_2: string;
-	address_line_3: string | null;
+	dateOfBirth: Date;
+	phoneNumber: string | null;
+	mobileNumber: string;
+	addressLine1: string;
+	addressLine2: string;
+	addressLine3: string | null;
 	postcode: string;
 	country: string;
 	longitude: number;
@@ -47,10 +47,10 @@ interface FormsRow {
 
 interface FormErrorsRow {
 	id: number;
-	application_reference: string | null;
-	form_content: unknown;
-	schema_errors: unknown;
-	runtime_errors: unknown;
+	applicationReference: string | null;
+	formContent: unknown;
+	schemaErrors: unknown;
+	runtimeErrors: unknown;
 }
 
 // Jest runs test files in parallel workers against the same live DB (see the crud suite's note),
@@ -210,8 +210,8 @@ describe("POST /ingest (e2e, real test db)", () => {
 
 			expect(rows).toHaveLength(1);
 			// schema_errors is a JSONB column; node-pg parses it back to the JS array persisted.
-			expect(Array.isArray(rows[0].schema_errors)).toBe(true);
-			expect(rows[0].schema_errors as unknown[]).not.toHaveLength(0);
+			expect(Array.isArray(rows[0].schemaErrors)).toBe(true);
+			expect(rows[0].schemaErrors as unknown[]).not.toHaveLength(0);
 		});
 
 		it("leaves runtime_errors blank on that FormErrors row", async () => {
@@ -221,7 +221,7 @@ describe("POST /ingest (e2e, real test db)", () => {
 			const rows = await getFormErrorsRows(invalidForm.application_reference as string);
 
 			expect(rows).toHaveLength(1);
-			expect(rows[0].runtime_errors).toBeNull();
+			expect(rows[0].runtimeErrors).toBeNull();
 		});
 
 		it("does not create a Forms row", async () => {
