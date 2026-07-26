@@ -94,11 +94,11 @@ function postIngest(data: Record<string, unknown>) {
 }
 
 function getFormsRows(applicationReference: string) {
-	return postgresClient.getRecords<FormsRow>("forms", "application_reference", [applicationReference]);
+	return postgresClient.getRecords<FormsRow>("forms", "applicationReference", [applicationReference]);
 }
 
 function getFormErrorsRows(applicationReference: string) {
-	return postgresClient.getRecords<FormErrorsRow>("formerrors", "application_reference", [applicationReference]);
+	return postgresClient.getRecords<FormErrorsRow>("formerrors", "applicationReference", [applicationReference]);
 }
 
 describe("POST /ingest (e2e, real test db)", () => {
@@ -110,9 +110,9 @@ describe("POST /ingest (e2e, real test db)", () => {
 		for (const applicationReference of referencesToClean) {
 			// Best-effort per-row teardown. delete() throws on a 0-row delete (a reference a test
 			// registered but never persisted a row for) — benign here, so swallow it.
-			await postgresClient.delete("forms", "application_reference", applicationReference).catch(() => undefined);
+			await postgresClient.delete("forms", "applicationReference", applicationReference).catch(() => undefined);
 			await postgresClient
-				.delete("formerrors", "application_reference", applicationReference)
+				.delete("formerrors", "applicationReference", applicationReference)
 				.catch(() => undefined);
 		}
 		referencesToClean.clear();
@@ -141,17 +141,17 @@ describe("POST /ingest (e2e, real test db)", () => {
 
 			expect(rows).toHaveLength(1);
 			expect(rows[0]).toMatchObject({
-				session_id: "session-1",
-				application_reference: form.application_reference,
-				first_name: "John",
-				last_name: "Doe",
+				sessionId: "session-1",
+				applicationReference: form.application_reference,
+				firstName: "John",
+				lastName: "Doe",
 				email: "john.doe@example.com",
 				gender: "male",
-				phone_number: "07123456789",
-				mobile_number: "07000000000",
-				address_line_1: "Stratford Village Surgery",
-				address_line_2: "50C Romford Road",
-				address_line_3: "London",
+				phoneNumber: "07123456789",
+				mobileNumber: "07000000000",
+				addressLine1: "Stratford Village Surgery",
+				addressLine2: "50C Romford Road",
+				addressLine3: "London",
 				postcode: "E15 4BZ",
 				country: "United Kingdom",
 				longitude: GEOCODE_RESULT.longitude,
@@ -232,9 +232,7 @@ describe("POST /ingest (e2e, real test db)", () => {
 
 			expect(rows).toHaveLength(0);
 		});
-	});
 
-	describe("Edge: application_reference present but another field invalid", () => {
 		it("records application_reference on the FormErrors row when present in the invalid payload", async () => {
 			const invalidForm = buildIngestedForm({ gender: "not-a-valid-gender" });
 
@@ -242,7 +240,7 @@ describe("POST /ingest (e2e, real test db)", () => {
 			const rows = await getFormErrorsRows(invalidForm.application_reference as string);
 
 			expect(rows).toHaveLength(1);
-			expect(rows[0].application_reference).toBe(invalidForm.application_reference);
+			expect(rows[0].applicationReference).toBe(invalidForm.application_reference);
 		});
 	});
 });
