@@ -58,10 +58,14 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   promise per reference inside a single `Promise.allSettled` (so one still-failing reference
   never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
   only when ingest succeeds. On a still-failing retry, the row is **not** left untouched: it
-  calls `update("formerrors", "id", id, { schema_errors | runtime_errors: <latest> })` (#34) —
-  `schema_errors` for a `statusCode: 400` (I1 validation) failure, `runtime_errors` for anything
-  else (e.g. a `409` duplicate) — which also bumps `updated_at`; the other error column, if
-  previously set, is left as-is. A failure to persist that update is logged but doesn't change
+  calls `update("formerrors", "id", id, { schema_errors, runtime_errors })` (#34) writing a
+  **full snapshot of the current failure across both columns** — the column matching this
+  attempt's failure type (`schema_errors` for a `statusCode: 400` I1 validation failure,
+  `runtime_errors` for anything else, e.g. a `409` duplicate) gets the latest errors and the
+  other column is **cleared to null** — so the row always represents why the form is failing
+  *now* rather than a stale mix of past and present failures (e.g. a prior runtime failure that's
+  since been fixed is nulled when the form now fails schema validation). The `update` also bumps
+  `updated_at`. A failure to persist that update is logged but doesn't change
   the reference's already-rejected outcome. Responds `200` with an array, one entry per input
   reference, **preserving input order**. Each entry carries its `application_reference` plus a
   `status` (`{status, application_reference, value}` on success / `{status, application_reference}`

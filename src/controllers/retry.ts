@@ -60,16 +60,21 @@ async function reprocessFormErrorRecord(applicationReference: string, formErrorR
 			errors: ingestResult.errors,
 		});
 
-		// A 400 is I1 schema validation rejecting the payload (schema_errors); any other
-		// error statusCode from the ingest lib (e.g. a 409 duplicate, or a future geocode
-		// failure) is a runtime failure rather than a shape problem (runtime_errors). Only
-		// the relevant column is written — the other error column, if previously set, is left
-		// alone rather than cleared, since this retry attempt says nothing about it.
-		const errorColumnName = ingestResult.statusCode === 400 ? "schema_errors" : "runtime_errors";
+		// Write a full snapshot of *why the form is failing now* across BOTH error columns,
+		// so the row is never a stale mix of past and present failures. A 400 is I1 schema
+		// validation rejecting the payload (schema_errors); any other error statusCode from
+		// the ingest lib (e.g. a 409 duplicate, or a future geocode failure) is a runtime
+		// failure rather than a shape problem (runtime_errors). The column for this attempt's
+		// failure type gets the latest errors; the other is cleared to null — e.g. if a prior
+		// runtime failure has since been fixed but the form now fails schema validation,
+		// runtime_errors is nulled so it doesn't misrepresent the current failure.
+		const isSchemaFailure = ingestResult.statusCode === 400;
+		const latestErrors = JSON.stringify(ingestResult.errors);
 
 		try {
 			await postgresClient.update("formerrors", "id", formErrorRecord.id, {
-				[errorColumnName]: JSON.stringify(ingestResult.errors),
+				schema_errors: isSchemaFailure ? latestErrors : null,
+				runtime_errors: isSchemaFailure ? null : latestErrors,
 			});
 		} catch (error) {
 			console.error("retry: unexpected error updating the FormErrors record after a still-failing retry", {

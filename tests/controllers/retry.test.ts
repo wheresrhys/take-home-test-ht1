@@ -150,7 +150,7 @@ describe("POST /retry", () => {
 	});
 
 	describe("POST /retry — still-failing reference", () => {
-		it("Usual: replaces schema_errors with the latest error via postgresClient.update, does not delete the row", async () => {
+		it("Usual: writes a full snapshot (schema_errors set, runtime_errors cleared) via postgresClient.update, does not delete the row", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-still-failing", { id: 7 });
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedIngestForm.mockResolvedValue({ statusCode: 400, errors: ["still invalid"] });
@@ -160,13 +160,14 @@ describe("POST /retry", () => {
 
 			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 7, {
 				schema_errors: JSON.stringify(["still invalid"]),
+				runtime_errors: null,
 			});
 			expect(mockedDelete).not.toHaveBeenCalled();
 			// still no error reason leaked to the caller
 			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-still-failing" }]);
 		});
 
-		it("Structure: writes a non-400 failure to runtime_errors rather than schema_errors", async () => {
+		it("Structure: a non-400 failure sets runtime_errors and clears schema_errors", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-duplicate", { id: 8 });
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedIngestForm.mockResolvedValue({ statusCode: 409, errors: ["duplicate application_reference"] });
@@ -176,6 +177,7 @@ describe("POST /retry", () => {
 
 			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 8, {
 				runtime_errors: JSON.stringify(["duplicate application_reference"]),
+				schema_errors: null,
 			});
 		});
 
@@ -213,6 +215,7 @@ describe("POST /retry", () => {
 			expect(mockedUpdate).toHaveBeenCalledTimes(1);
 			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 11, {
 				schema_errors: JSON.stringify(["still invalid"]),
+				runtime_errors: null,
 			});
 		});
 
