@@ -149,7 +149,10 @@ export async function ingestForm(
 		// A duplicate delivery (provider sends at-least-once, per README) is expected, not a
 		// failure to retry — short-circuit to 409 without writing a FormErrors record
 		if (isUniqueViolationError(error)) {
-			return { statusCode: 409, errors: ["duplicate application_reference"] };
+			// Generic reason only — deliberately does NOT name application_reference. Even though
+			// callers currently drop this array from user-facing responses, a duplicate-reference
+			// string would confirm the reference already exists if it ever leaked (security).
+			return { statusCode: 409, errors: ["conflict"] };
 		}
 
 		throw error;
