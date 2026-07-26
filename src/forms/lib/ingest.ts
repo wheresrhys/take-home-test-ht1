@@ -121,10 +121,10 @@ export async function ingestForm(
 
 	if (!validationResult.valid) {
 		await postgresClient.create("formerrors", {
-			application_reference: extractApplicationReference(data),
-			form_content: data,
-			schema_errors: validationResult.errors,
-			runtime_errors: null,
+			applicationReference: extractApplicationReference(data),
+			formContent: data,
+			schemaErrors: validationResult.errors,
+			runtimeErrors: null,
 		});
 
 		return { statusCode: 400, errors: validationResult.errors };

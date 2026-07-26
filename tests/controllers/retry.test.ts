@@ -54,10 +54,10 @@ function buildValidIngestedFormContent(overrides: Record<string, unknown> = {}):
 function buildFormErrorRecord(applicationReference: string, overrides: Record<string, unknown> = {}) {
 	return {
 		id: 1,
-		application_reference: applicationReference,
-		form_content: { session_id: "abc" },
-		schema_errors: null,
-		runtime_errors: null,
+		applicationReference: applicationReference,
+		formContent: { session_id: "abc" },
+		schemaErrors: null,
+		runtimeErrors: null,
 		...overrides,
 	};
 }
@@ -183,7 +183,7 @@ describe("POST /retry", () => {
 	});
 
 	describe("POST /retry — still-failing reference", () => {
-		it("Usual: writes a full snapshot (schema_errors set, runtime_errors cleared) via postgresClient.update, does not delete the row", async () => {
+		it("Usual: writes a full snapshot (schemaErrors set, runtimeErrors cleared) via postgresClient.update, does not delete the row", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-still-failing", { id: 7 });
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedIngestForm.mockResolvedValue({ statusCode: 400, errors: ["still invalid"] });
@@ -192,15 +192,15 @@ describe("POST /retry", () => {
 			const response = await request(app).post("/retry").send({ references: ["ref-still-failing"] });
 
 			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 7, {
-				schema_errors: JSON.stringify(["still invalid"]),
-				runtime_errors: null,
+				schemaErrors: JSON.stringify(["still invalid"]),
+				runtimeErrors: null,
 			});
 			expect(mockedDelete).not.toHaveBeenCalled();
 			// still no error reason leaked to the caller
 			expect(response.body).toEqual([{ status: "rejected", application_reference: "ref-still-failing" }]);
 		});
 
-		it("Structure: a non-400 failure sets runtime_errors and clears schema_errors", async () => {
+		it("Structure: a non-400 failure sets runtimeErrors and clears schemaErrors", async () => {
 			const formErrorRecord = buildFormErrorRecord("ref-duplicate", { id: 8 });
 			mockedGetRecords.mockResolvedValue([formErrorRecord]);
 			mockedIngestForm.mockResolvedValue({ statusCode: 409, errors: ["duplicate application_reference"] });
@@ -209,8 +209,8 @@ describe("POST /retry", () => {
 			await request(app).post("/retry").send({ references: ["ref-duplicate"] });
 
 			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 8, {
-				runtime_errors: JSON.stringify(["duplicate application_reference"]),
-				schema_errors: null,
+				runtimeErrors: JSON.stringify(["duplicate application_reference"]),
+				schemaErrors: null,
 			});
 		});
 
@@ -227,8 +227,8 @@ describe("POST /retry", () => {
 		});
 
 		it("Edge: a mixed batch settles each reference independently (success deleted, failure updated, no-match untouched)", async () => {
-			const successRecord = buildFormErrorRecord("ref-success", { id: 10, form_content: { tag: "success" } });
-			const failureRecord = buildFormErrorRecord("ref-fail", { id: 11, form_content: { tag: "fail" } });
+			const successRecord = buildFormErrorRecord("ref-success", { id: 10, formContent: { tag: "success" } });
+			const failureRecord = buildFormErrorRecord("ref-fail", { id: 11, formContent: { tag: "fail" } });
 			mockedGetRecords.mockResolvedValue([successRecord, failureRecord]);
 			mockedIngestForm.mockImplementation(async (data) => {
 				if ((data as { tag: string }).tag === "success") {
@@ -247,8 +247,8 @@ describe("POST /retry", () => {
 			expect(mockedDelete).toHaveBeenCalledWith("formerrors", "id", 10);
 			expect(mockedUpdate).toHaveBeenCalledTimes(1);
 			expect(mockedUpdate).toHaveBeenCalledWith("formerrors", "id", 11, {
-				schema_errors: JSON.stringify(["still invalid"]),
-				runtime_errors: null,
+				schemaErrors: JSON.stringify(["still invalid"]),
+				runtimeErrors: null,
 			});
 		});
 
@@ -271,8 +271,8 @@ describe("POST /retry", () => {
 	});
 
 	describe("Structure: mixed batch of successes and failures", () => {
-		const successRecord = buildFormErrorRecord("ref-success", { id: 1, form_content: { tag: "success" } });
-		const failureRecord = buildFormErrorRecord("ref-fail", { id: 2, form_content: { tag: "fail" } });
+		const successRecord = buildFormErrorRecord("ref-success", { id: 1, formContent: { tag: "success" } });
+		const failureRecord = buildFormErrorRecord("ref-fail", { id: 2, formContent: { tag: "fail" } });
 
 		beforeEach(() => {
 			mockedGetRecords.mockResolvedValue([successRecord, failureRecord]);

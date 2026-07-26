@@ -37,8 +37,8 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `application_reference` read defensively off `req.body.data`, method, path) and responds with a
   generic `5xx` body that never leaks internals. If the error is **not** a DB error
   (`isDatabaseError`, from `postgres-client.ts`), it also writes a best-effort `FormErrors` row
-  (`application_reference`, `form_content` = raw request body, `runtime_errors` populated,
-  `schema_errors` left blank) via `postgresClient.create` so the form can be reprocessed via
+  (`applicationReference`, `formContent` = raw request body, `runtimeErrors` populated,
+  `schemaErrors` left blank) via `postgresClient.create` so the form can be reprocessed via
   `/retry`; DB errors skip that write (the DB is presumably down, so writing would just throw
   again and mask the original error). `src/index.ts` — server bootstrap (`PORT`, default 3000).
 - `src/lib/asyncHandler.ts` — generic Express 4 helper: wraps an async route handler so a
@@ -51,10 +51,10 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   lib's `errors` array is deliberately dropped here, never forwarded to the caller (no validator
   diagnostics, no raw submitted data).
 - `src/controllers/retry.ts` — `retryFailedForms`, wired up as `POST /retry`. Accepts
-  `{ references: string[] }` (each a `FormErrors.application_reference`); `400` on any other
+  `{ references: string[] }` (each a `FormErrors.applicationReference`); `400` on any other
   shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
   each reference it fetches the matching `FormErrors` row (`getRecords("formerrors",
-  "application_reference", references)`), replays `form_content` through the same `ingestForm`
+  "applicationReference", references)`), replays `formContent` through the same `ingestForm`
   (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — passing
   `{ sendConfirmationEmail: true }` (same option `/ingest` passes, per review feedback on #41 —
   a form that succeeds on retry now gets the same best-effort confirmation email to
@@ -63,14 +63,14 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   promise per reference inside a single `Promise.allSettled` (so one still-failing reference
   never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
   only when ingest succeeds. On a still-failing retry, the row is **not** left untouched: it
-  calls `update("formerrors", "id", id, { schema_errors, runtime_errors })` (#34) writing a
+  calls `update("formerrors", "id", id, { schemaErrors, runtimeErrors })` (#34) writing a
   **full snapshot of the current failure across both columns** — the column matching this
-  attempt's failure type (`schema_errors` for a `statusCode: 400` I1 validation failure,
-  `runtime_errors` for anything else, e.g. a `409` duplicate) gets the latest errors and the
+  attempt's failure type (`schemaErrors` for a `statusCode: 400` I1 validation failure,
+  `runtimeErrors` for anything else, e.g. a `409` duplicate) gets the latest errors and the
   other column is **cleared to null** — so the row always represents why the form is failing
   *now* rather than a stale mix of past and present failures (e.g. a prior runtime failure that's
   since been fixed is nulled when the form now fails schema validation). The `update` also bumps
-  `updated_at`. A failure to persist that update is logged but doesn't change
+  `updatedAt`. A failure to persist that update is logged but doesn't change
   the reference's already-rejected outcome. Responds `200` with an array, one entry per input
   reference, **preserving input order**. Each entry carries its `application_reference` plus a
   `status` (`{status, application_reference, value}` on success / `{status, application_reference}`
@@ -102,15 +102,15 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   postcode → `transformData` → `postgresClient.create("forms", transformedRow)` →
   `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`. Schema-invalid path
   (I4): on I1 validator failure, before returning `{ statusCode: 400, errors }`, writes a
-  `FormErrors` row via `postgresClient.create("formerrors", { application_reference, form_content,
-  schema_errors, runtime_errors: null })` — `form_content` is the raw submitted `data` unmodified,
-  `schema_errors` is the validator's error array, and `application_reference` is defensively
+  `FormErrors` row via `postgresClient.create("formerrors", { applicationReference, formContent,
+  schemaErrors, runtimeErrors: null })` — `formContent` is the raw submitted `data` unmodified,
+  `schemaErrors` is the validator's error array, and `applicationReference` is defensively
   extracted from the unvalidated payload (coerced to a string when truthy but not already a
   string, `null` when missing/falsy) so the row is written even when validation itself failed
   on that field — captured so the record can be fixed and replayed via `/retry` (R1) after a
   deploy. Duplicate handling (I5): a `create()` rejection is checked with the colocated
   `isUniqueViolationError(error)` (matches Postgres unique-violation code `23505`, raised on a
-  repeat `Forms.application_reference` — the PK, per D3); on a match, `ingestForm` short-circuits
+  repeat `Forms.applicationReference` — the PK, per D3); on a match, `ingestForm` short-circuits
   to `{ statusCode: 409, errors: [...] }` without writing a `FormErrors` record (a duplicate
   delivery is expected, not a failure to retry) and without leaking the raw pg error. Any other
   rejection is rethrown unchanged, caught by the `app.ts` error-handling middleware (I6). Geocode
@@ -139,14 +139,18 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     data)` (INSERT ... RETURNING \*), `getRecords<T>(tableName, idColumn, ids)` (SELECT ... WHERE
     idColumn IN (...), with an early-return `[]` guard for an empty `ids` array — avoids an
     invalid empty `IN ()`), `update<T>(tableName, idColumn, id, data)` (UPDATE ... SET <data's
-    columns>, updated_at = now() WHERE idColumn = id RETURNING \*; `updated_at` is always bumped
+    columns>, "updatedAt" = now() WHERE idColumn = id RETURNING \*; `updatedAt` is always bumped
     regardless of which columns the caller passes, so call sites never have to remember it),
     and `delete(tableName, idColumn, id)` (DELETE ... WHERE idColumn = id;
     rejects with an Error naming the table/idColumn/id if `rowCount` is 0 — no silent no-op;
     `update` mirrors this same 0-row guard on its `RETURNING` rows). All four use parameterised
     queries for values; `tableName`/
     `idColumn` are only ever passed by trusted internal call sites (`Forms`/`FormErrors`), never
-    from request bodies, so they're interpolated directly. `delete` is attached as an object
+    from request bodies, so they're interpolated directly — column identifiers via a
+    `quoteIdentifier` helper (double-quoted) so camelCase columns (e.g. `sessionId`) resolve
+    instead of silently folding to lowercase. `Forms`/`FormErrors` columns are quoted camelCase
+    (matching `TransformedFormSchema`), so `create("forms", transformedRow)` persists the
+    transformed row directly with no snake_case remapping. `delete` is attached as an object
     property (not a `function delete` declaration) since `delete` is a reserved word as a
     standalone identifier but a valid property key. None of the four catch/transform `pg`
     errors — callers (ingest/retry) branch on error shape (e.g. `error.code === '23505'` for a
@@ -179,7 +183,7 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   re-applied on every `db:start`, including against an already-provisioned database. A column
   added to a table after its initial `CREATE TABLE` ships as an `ALTER TABLE ... ADD COLUMN IF
   NOT EXISTS` appended to that table's file, per the same idempotency rule (e.g.
-  `FormErrors.sql`'s `created_at`/`updated_at`, added post-creation to back `postgresClient`'s
+  `FormErrors.sql`'s `createdAt`/`updatedAt`, added post-creation to back `postgresClient`'s
   `update` method — see #34).
   `zz_FormIngesterRole.sql` creates the `form_ingester` login role (no superuser/createdb/
   createrole) the app connects as, with CRUD-only grants on `Forms`/`FormErrors` — the app's

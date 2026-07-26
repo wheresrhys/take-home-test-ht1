@@ -17,5 +17,5 @@ ALTER ROLE form_ingester WITH PASSWORD 'ingesterpassword';
 GRANT SELECT, INSERT, UPDATE, DELETE ON forms, FormErrors TO form_ingester;
 
 -- Needed for `INSERT ... RETURNING id` against FormErrors under a non-owner role.
--- Forms' PK (application_reference) is app-supplied, so no sequence grant there.
+-- Forms' PK ("applicationReference") is app-supplied, so no sequence grant there.
 GRANT USAGE, SELECT ON SEQUENCE formerrors_id_seq TO form_ingester;
