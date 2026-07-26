@@ -45,7 +45,7 @@ async function reprocessFormErrorRecord(applicationReference: string, formErrorR
 	let ingestResult;
 
 	try {
-		ingestResult = await ingestForm(formErrorRecord.formContent);
+		ingestResult = await ingestForm(formErrorRecord.formContent, { sendConfirmationEmail: true });
 	} catch (error) {
 		console.error("retry: unexpected error calling the ingest lib during retry", {
 			application_reference: applicationReference,

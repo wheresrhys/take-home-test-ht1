@@ -43,18 +43,23 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   again and mask the original error). `src/index.ts` — server bootstrap (`PORT`, default 3000).
 - `src/lib/asyncHandler.ts` — generic Express 4 helper: wraps an async route handler so a
   rejection is forwarded via `next(err)`. Not forms-specific — shared by `/ingest` and `/retry`.
-- `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm`, maps
-  the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`, narrowing
-  via `'data' in result`). No validation/geocode/transform/persist logic lives here. On a failure
-  result the response body is a fixed, generic `{ message: string }` — the lib's `errors` array
-  is deliberately dropped here, never forwarded to the caller (no validator diagnostics, no raw
-  submitted data).
+- `src/controllers/ingest.ts` — thin controller: reads `req.body.data`, calls `ingestForm(data,
+  { sendConfirmationEmail: true })` (I7 — opts real traffic into the best-effort confirmation
+  email), maps the `IngestResult` onto the HTTP response (`res.status(result.statusCode).json(...)`,
+  narrowing via `'data' in result`). No validation/geocode/transform/persist/email logic lives
+  here. On a failure result the response body is a fixed, generic `{ message: string }` — the
+  lib's `errors` array is deliberately dropped here, never forwarded to the caller (no validator
+  diagnostics, no raw submitted data).
 - `src/controllers/retry.ts` — `retryFailedForms`, wired up as `POST /retry`. Accepts
   `{ references: string[] }` (each a `FormErrors.applicationReference`); `400` on any other
   shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
   each reference it fetches the matching `FormErrors` row (`getRecords("formerrors",
   "applicationReference", references)`), replays `formContent` through the same `ingestForm`
-  (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — as one independent
+  (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — passing
+  `{ sendConfirmationEmail: true }` (same option `/ingest` passes, per review feedback on #41 —
+  a form that succeeds on retry now gets the same best-effort confirmation email to
+  happyforms@bots.com as one that succeeds first time; still not sent when a retried reference
+  still fails or doesn't match a `FormErrors` row) — as one independent
   promise per reference inside a single `Promise.allSettled` (so one still-failing reference
   never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
   only when ingest succeeds. On a still-failing retry, the row is **not** left untouched: it
@@ -110,6 +115,18 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   delivery is expected, not a failure to retry) and without leaking the raw pg error. Any other
   rejection is rethrown unchanged, caught by the `app.ts` error-handling middleware (I6). Geocode
   failure handling remains a later ticket — this lib currently assumes `lookupPostcode` succeeds.
+  Confirmation email (I7): `ingestForm` takes a 2nd `options` param, currently just
+  `{ sendConfirmationEmail?: boolean }` (`IngestFormOptions`). On the 201 happy path, when the
+  flag is true, it fires `sendgrid.sendEmail({ to: "happyforms@bots.com", from: ..., subject,
+  body })` **without awaiting it** before returning — best-effort, per the ticket's logged
+  product decision to defer the README's "guaranteed" wording. A non-2xx response or a rejection
+  is caught via `.then`/`.catch` and logged (`console.error`, with `application_reference`); the
+  already-returned success response is never altered and no `FormErrors` row is written. No email
+  on the 400/5xx branches, or when the flag is falsy/omitted (the default — nothing currently
+  omits it deliberately; both real call sites opt in). `src/controllers/ingest.ts` and
+  `src/controllers/retry.ts`'s per-reference replay both pass `{ sendConfirmationEmail: true }`,
+  so a form that succeeds on either its first `/ingest` attempt or a later `/retry` gets the
+  confirmation email.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
@@ -144,12 +161,14 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     violations, syntax errors); a fully unreachable DB (connection refused) isn't a
     `DatabaseError` instance — accepted as out of scope for now (no full DB-failure taxonomy).
 - `tests/` — mirrors `src/`. `tests/controllers/ingest.test.ts` is the BDD/supertest suite for
-  `POST /ingest`, mocking `idealpostcodes.lookupPostcode` and the db client's `create` — no real
-  network/DB; its `postgres-client` mock reimplements `isDatabaseError` against pg's real
-  `DatabaseError` class (rather than `jest.requireActual`) so the suite never loads the real
-  module and its env-var-backed `Pool`. Covers the error-handling middleware's three paths: a
-  runtime error mid-ingest, a DB error (skips the `FormErrors` write), and an error before
-  `application_reference` is parseable (malformed JSON body).
+  `POST /ingest`, mocking `idealpostcodes.lookupPostcode`, `sendgrid.sendEmail`, and the db
+  client's `create` — no real network/DB; its `postgres-client` mock reimplements
+  `isDatabaseError` against pg's real `DatabaseError` class (rather than `jest.requireActual`) so
+  the suite never loads the real module and its env-var-backed `Pool`. Covers the error-handling
+  middleware's three paths: a runtime error mid-ingest, a DB error (skips the `FormErrors`
+  write), and an error before `application_reference` is parseable (malformed JSON body). Also
+  covers the I7 confirmation email: sent on the 201 happy path (and the HTTP response returns
+  without waiting on an unresolved `sendEmail` promise), not sent on 400 or 500.
   `tests/providers/postgres-client.test.ts` unit-tests
   `createPostgresPool()`/the singleton with `pg` mocked; `tests/providers/postgres-client-crud.test.ts`
   integration-tests `create`/`getRecords`/`update`/`delete` against the real docker DB (kept in a
