@@ -20,10 +20,20 @@ export const createPostgresPool = (): Pool => {
 	});
 };
 
+// Wraps a column identifier in double quotes so Postgres treats it case-sensitively rather than
+// folding it to lowercase — camelCase columns (e.g. "sessionId") only resolve when quoted, and an
+// unquoted `sessionId` silently becomes `sessionid`, which doesn't exist. Embedded quotes are
+// doubled per SQL identifier rules. Identifiers here are only ever trusted internal column names
+// (never request-sourced), so this is about correctness (fold-safety), not injection defence.
+function quoteIdentifier(identifier: string): string {
+	return `"${identifier.replace(/"/g, '""')}"`;
+}
+
 // Generic CRUD methods attached onto the singleton pool below. Table/column identifiers
 // (tableName/idColumn) are only ever passed by trusted internal call sites (Forms/FormErrors
 // repositories) — never sourced from request bodies — so they're interpolated directly into
-// the query text. All *values* go through as query parameters ($1, $2, ...), never concatenated.
+// the query text (column identifiers via quoteIdentifier so camelCase columns don't fold to
+// lowercase). All *values* go through as query parameters ($1, $2, ...), never concatenated.
 async function create<T extends QueryResultRow>(
 	pool: Pool,
 	tableName: string,
@@ -32,9 +42,10 @@ async function create<T extends QueryResultRow>(
 	const columnNames = Object.keys(data);
 	const values = Object.values(data);
 	const placeholders = values.map((_value, index) => `$${index + 1}`).join(", ");
+	const quotedColumns = columnNames.map(quoteIdentifier).join(", ");
 
 	const { rows } = await pool.query<T>(
-		`INSERT INTO ${tableName} (${columnNames.join(", ")}) VALUES (${placeholders}) RETURNING *`,
+		`INSERT INTO ${tableName} (${quotedColumns}) VALUES (${placeholders}) RETURNING *`,
 		values,
 	);
 
@@ -54,7 +65,10 @@ async function getRecords<T extends QueryResultRow>(
 
 	const placeholders = ids.map((_id, index) => `$${index + 1}`).join(", ");
 
-	const { rows } = await pool.query<T>(`SELECT * FROM ${tableName} WHERE ${idColumn} IN (${placeholders})`, ids);
+	const { rows } = await pool.query<T>(
+		`SELECT * FROM ${tableName} WHERE ${quoteIdentifier(idColumn)} IN (${placeholders})`,
+		ids,
+	);
 
 	return rows;
 }
@@ -68,15 +82,15 @@ async function update<T extends QueryResultRow>(
 ): Promise<T> {
 	const columnNames = Object.keys(data);
 	const values = Object.values(data);
-	// updated_at is always bumped to now() alongside the caller's columns, rather than left to
+	// "updatedAt" is always bumped to now() alongside the caller's columns, rather than left to
 	// the caller to pass — every update() call represents the row changing, so this keeps
 	// call sites from having to remember it.
 	const setClauses = columnNames
-		.map((columnName, index) => `${columnName} = $${index + 1}`)
-		.concat("updated_at = now()");
+		.map((columnName, index) => `${quoteIdentifier(columnName)} = $${index + 1}`)
+		.concat(`${quoteIdentifier("updatedAt")} = now()`);
 
 	const { rows } = await pool.query<T>(
-		`UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${idColumn} = $${values.length + 1} RETURNING *`,
+		`UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${quoteIdentifier(idColumn)} = $${values.length + 1} RETURNING *`,
 		[...values, id],
 	);
 
@@ -88,7 +102,7 @@ async function update<T extends QueryResultRow>(
 }
 
 async function deleteRecord(pool: Pool, tableName: string, idColumn: string, id: string | number): Promise<void> {
-	const { rowCount } = await pool.query(`DELETE FROM ${tableName} WHERE ${idColumn} = $1`, [id]);
+	const { rowCount } = await pool.query(`DELETE FROM ${tableName} WHERE ${quoteIdentifier(idColumn)} = $1`, [id]);
 
 	if (!rowCount) {
 		throw new Error(`postgres-client: delete affected 0 rows — no ${tableName} row with ${idColumn} = ${id}`);

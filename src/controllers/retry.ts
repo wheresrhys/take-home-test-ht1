@@ -5,10 +5,10 @@ import { postgresClient } from "../providers/postgres-client";
 
 interface FormErrorRecord {
 	id: number;
-	application_reference: string;
-	form_content: unknown;
-	schema_errors: unknown;
-	runtime_errors: unknown;
+	applicationReference: string;
+	formContent: unknown;
+	schemaErrors: unknown;
+	runtimeErrors: unknown;
 }
 
 // One result row per requested reference. Mirrors Promise.allSettled's `status` field and, on
@@ -45,7 +45,7 @@ async function reprocessFormErrorRecord(applicationReference: string, formErrorR
 	let ingestResult;
 
 	try {
-		ingestResult = await ingestForm(formErrorRecord.form_content);
+		ingestResult = await ingestForm(formErrorRecord.formContent, { sendConfirmationEmail: true });
 	} catch (error) {
 		console.error("retry: unexpected error calling the ingest lib during retry", {
 			application_reference: applicationReference,
@@ -73,8 +73,8 @@ async function reprocessFormErrorRecord(applicationReference: string, formErrorR
 
 		try {
 			await postgresClient.update("formerrors", "id", formErrorRecord.id, {
-				schema_errors: isSchemaFailure ? latestErrors : null,
-				runtime_errors: isSchemaFailure ? null : latestErrors,
+				schemaErrors: isSchemaFailure ? latestErrors : null,
+				runtimeErrors: isSchemaFailure ? null : latestErrors,
 			});
 		} catch (error) {
 			console.error("retry: unexpected error updating the FormErrors record after a still-failing retry", {
@@ -121,7 +121,7 @@ export async function retryFailedForms(req: Request, res: Response): Promise<voi
 	try {
 		formErrorRecords = await postgresClient.getRecords<FormErrorRecord>(
 			"formerrors",
-			"application_reference",
+			"applicationReference",
 			references,
 		);
 	} catch (error) {
@@ -131,7 +131,7 @@ export async function retryFailedForms(req: Request, res: Response): Promise<voi
 	}
 
 	const formErrorRecordsByReference = new Map(
-		formErrorRecords.map((formErrorRecord) => [formErrorRecord.application_reference, formErrorRecord]),
+		formErrorRecords.map((formErrorRecord) => [formErrorRecord.applicationReference, formErrorRecord]),
 	);
 
 	const settledResults = await Promise.allSettled(

@@ -1,28 +1,34 @@
 -- Forms table: mirrors the outbound shape in src/forms/schemas/transformed_schema.ts.
--- application_reference is the PRIMARY KEY — this is the dedupe mechanism for
--- at-least-once delivery from the provider (see README.md / CLAUDE.md).
+-- Columns are quoted camelCase identifiers matching TransformedFormSchema exactly, so
+-- postgresClient.create("forms", transformedRow) persists the transformed row directly with
+-- no snake_case remapping. Quoting is load-bearing: an unquoted camelCase identifier folds to
+-- lowercase (e.g. sessionId -> sessionid), so both this schema and the postgres client
+-- (src/providers/postgres-client.ts) must quote every column identifier.
+-- "applicationReference" is the PRIMARY KEY — the dedupe mechanism for at-least-once delivery
+-- from the provider (see README.md / CLAUDE.md).
 
 CREATE TABLE IF NOT EXISTS forms (
-	session_id TEXT NOT NULL,
-	application_reference TEXT PRIMARY KEY,
-	first_name TEXT NOT NULL,
-	last_name TEXT NOT NULL,
-	email TEXT NOT NULL,
-	gender TEXT NOT NULL CHECK (gender IN ('male', 'female', 'prefer-not-to-say')),
-	date_of_birth DATE NOT NULL,
-	phone_number TEXT,
-	mobile_number TEXT NOT NULL,
-	address_line_1 TEXT NOT NULL,
-	address_line_2 TEXT NOT NULL,
-	address_line_3 TEXT,
-	postcode TEXT NOT NULL,
-	country TEXT NOT NULL,
-	longitude DOUBLE PRECISION NOT NULL,
-	latitude DOUBLE PRECISION NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	"sessionId" TEXT NOT NULL,
+	"applicationReference" TEXT PRIMARY KEY,
+	"firstName" TEXT NOT NULL,
+	"lastName" TEXT NOT NULL,
+	"email" TEXT NOT NULL,
+	"gender" TEXT NOT NULL CHECK ("gender" IN ('male', 'female', 'prefer-not-to-say')),
+	"dateOfBirth" DATE NOT NULL,
+	"phoneNumber" TEXT,
+	"mobileNumber" TEXT NOT NULL,
+	"addressLine1" TEXT NOT NULL,
+	"addressLine2" TEXT NOT NULL,
+	"addressLine3" TEXT,
+	"postcode" TEXT NOT NULL,
+	"country" TEXT NOT NULL,
+	"longitude" DOUBLE PRECISION NOT NULL,
+	"latitude" DOUBLE PRECISION NOT NULL,
+	"createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+	"updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS forms_date_of_birth_idx ON forms (date_of_birth);
-CREATE INDEX IF NOT EXISTS forms_postcode_idx ON forms (postcode);
-CREATE INDEX IF NOT EXISTS forms_session_id_idx ON forms (session_id);
+-- Indexes on the camelCase columns.
+CREATE INDEX IF NOT EXISTS forms_dateofbirth_idx ON forms ("dateOfBirth");
+CREATE INDEX IF NOT EXISTS forms_postcode_idx ON forms ("postcode");
+CREATE INDEX IF NOT EXISTS forms_sessionid_idx ON forms ("sessionId");

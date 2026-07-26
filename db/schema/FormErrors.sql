@@ -1,18 +1,18 @@
+-- FormErrors: captured failed forms, replayable via /retry after a fix ships. Columns are
+-- quoted camelCase identifiers, matching the Forms table's convention (see Forms.sql) so the
+-- whole data layer shares one column-naming convention and postgresClient call sites pass
+-- camelCase keys directly. `id` stays lowercase (no fold risk). Quoting is load-bearing — an
+-- unquoted camelCase identifier folds to lowercase; the postgres client quotes to match.
+
 CREATE TABLE IF NOT EXISTS FormErrors (
 	id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-	application_reference TEXT,
-	form_content JSONB NOT NULL,
-	schema_errors JSONB,
-	runtime_errors JSONB
+	"applicationReference" TEXT,
+	"formContent" JSONB NOT NULL,
+	"schemaErrors" JSONB,
+	"runtimeErrors" JSONB,
+	"createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+	"updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS formerrors_application_reference_idx
-	ON FormErrors (application_reference);
-
--- Added after the table's initial creation, so applied idempotently via ADD COLUMN IF NOT
--- EXISTS (per the db/schema/ idempotency rule) rather than folded into the CREATE TABLE above —
--- re-applying this file against an already-provisioned DB must be a no-op on tables that already
--- have these columns. updated_at is bumped by postgresClient.update (src/providers/postgres-client.ts)
--- whenever /retry persists the latest error onto a still-failing row.
-ALTER TABLE FormErrors ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE FormErrors ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS formerrors_applicationreference_idx
+	ON FormErrors ("applicationReference");

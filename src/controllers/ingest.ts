@@ -12,7 +12,7 @@ const SCHEMA_INVALID_MESSAGE = "The submitted form could not be processed.";
 // validation/geocode/transform/persist business logic), and map its IngestResult onto the
 // HTTP response. Narrows via `'data' in result` per the discriminated union in ingest.ts.
 export async function ingestFormController(req: Request, res: Response): Promise<void> {
-	const result = await ingestForm(req.body.data);
+	const result = await ingestForm(req.body.data, { sendConfirmationEmail: true });
 
 	if ("data" in result) {
 		res.status(result.statusCode).json(result.data);
