@@ -120,10 +120,14 @@ export async function ingestForm(
 	const validationResult = validateIngestedForm(data);
 
 	if (!validationResult.valid) {
+		// form_content and schema_errors target JSONB columns. A raw JS array (schema_errors)
+		// would be sent as a Postgres array literal, which is invalid JSON and rejected by the
+		// jsonb column — so JSONB values are JSON.stringify'd here, matching how the error
+		// middleware (src/lib/errorHandler.ts) and the crud tests write FormErrors rows.
 		await postgresClient.create("formerrors", {
 			applicationReference: extractApplicationReference(data),
-			formContent: data,
-			schemaErrors: validationResult.errors,
+			formContent: JSON.stringify(data),
+			schemaErrors: JSON.stringify(validationResult.errors),
 			runtimeErrors: null,
 		});
 

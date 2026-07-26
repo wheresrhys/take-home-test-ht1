@@ -115,7 +115,8 @@ describe("POST /ingest", () => {
 			expect(response.status).toBe(400);
 		});
 
-		it("writes a FormErrors row: formContent = submitted data, schemaErrors = validator errors, runtimeErrors = null", async () => {
+
+		it("writes a FormErrors row: formContent = submitted data, schemaErrors = validator errors, runtimeErrors = null (JSONB values JSON-encoded)", async () => {
 			const invalidForm = buildIngestedForm({ email: undefined });
 
 			await postIngest(invalidForm);
@@ -123,7 +124,7 @@ describe("POST /ingest", () => {
 			expect(mockedCreate).toHaveBeenCalledWith(
 				"formerrors",
 				expect.objectContaining({
-					formContent: JSON.parse(JSON.stringify(invalidForm)),
+					formContent: JSON.stringify(invalidForm),
 					schemaErrors: expectedValidationErrors(invalidForm),
 					runtimeErrors: null,
 				}),
@@ -152,7 +153,10 @@ describe("POST /ingest", () => {
 				const response = await postIngest({});
 
 				expect(response.status).toBe(400);
-				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ formContent: {} }));
+				expect(mockedCreate).toHaveBeenCalledWith(
+					"formerrors",
+					expect.objectContaining({ formContent: JSON.stringify({}) }),
+				);
 			});
 		});
 
