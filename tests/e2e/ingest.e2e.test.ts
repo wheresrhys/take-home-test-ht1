@@ -168,4 +168,26 @@ describe("POST /ingest (e2e, real test db)", () => {
 			expect(formErrorsRows).toHaveLength(0);
 		});
 	});
+
+	describe("Structure: duplicate application_reference (conflict)", () => {
+		it("returns 201 on the first submission and 409 on the second of the same application_reference", async () => {
+			const form = buildIngestedForm();
+
+			const firstResponse = await postIngest(form);
+			const secondResponse = await postIngest(form);
+
+			expect(firstResponse.status).toBe(201);
+			expect(secondResponse.status).toBe(409);
+		});
+
+		it("leaves exactly one Forms row for that application_reference after the duplicate attempt", async () => {
+			const form = buildIngestedForm();
+
+			await postIngest(form);
+			await postIngest(form);
+			const rows = await getFormsRows(form.application_reference as string);
+
+			expect(rows).toHaveLength(1);
+		});
+	});
 });
