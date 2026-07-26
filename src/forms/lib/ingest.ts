@@ -127,7 +127,7 @@ export async function ingestForm(
 		await postgresClient.create("formerrors", {
 			applicationReference: extractApplicationReference(data),
 			formContent: JSON.stringify(data),
-			schemaErrors: validationResult.errors,
+			schemaErrors: JSON.stringify(validationResult.errors),
 			runtimeErrors: null,
 		});
 

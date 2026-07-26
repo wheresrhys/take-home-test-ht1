@@ -7,8 +7,9 @@ import request from "supertest";
 dotenv.config({ path: ".env.local", quiet: true });
 
 // idealpostcodes and sendgrid fail ~5% of calls by design; mock them for determinism. Their
-// failure behaviour is covered by the mocked BDD suites (I3–I7), out of scope here. (sendgrid
-// isn't wired into the ingest path yet — I2/I16 — but is mocked per the ticket for when it is.)
+// failure behaviour is covered by the mocked BDD suites (I3–I7), out of scope here. sendgrid is
+// wired into the ingest path (best-effort confirmation email on the 201 branch), so it's given a
+// resolving mock in beforeEach.
 jest.mock("../../src/providers/idealpostcodes");
 jest.mock("../../src/providers/sendgrid");
 
@@ -21,8 +22,11 @@ const { default: app } = require("../../src/app") as typeof import("../../src/ap
 const { postgresClient } = require("../../src/providers/postgres-client") as typeof import("../../src/providers/postgres-client");
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { lookupPostcode } = require("../../src/providers/idealpostcodes") as typeof import("../../src/providers/idealpostcodes");
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { sendEmail } = require("../../src/providers/sendgrid") as typeof import("../../src/providers/sendgrid");
 
 const mockedLookupPostcode = lookupPostcode as jest.MockedFunction<typeof lookupPostcode>;
+const mockedSendEmail = sendEmail as jest.MockedFunction<typeof sendEmail>;
 
 const GEOCODE_RESULT = { latitude: -5.05, longitude: 50.05 };
 
@@ -104,6 +108,11 @@ function getFormErrorsRows(applicationReference: string) {
 describe("POST /ingest (e2e, real test db)", () => {
 	beforeEach(() => {
 		mockedLookupPostcode.mockResolvedValue({ statusCode: 200, body: GEOCODE_RESULT });
+		// sendEmail is auto-mocked (returns undefined by default); the best-effort confirmation
+		// email in ingestForm calls .then on its return, so give it a resolving HttpResponse —
+		// mirrors the BDD suite. Without this, the 201 path throws "Cannot read properties of
+		// undefined (reading 'then')" and every happy-path assertion sees a 500.
+		mockedSendEmail.mockResolvedValue({ statusCode: 200, body: undefined });
 	});
 
 	afterEach(async () => {

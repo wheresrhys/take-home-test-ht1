@@ -125,7 +125,7 @@ describe("POST /ingest", () => {
 				"formerrors",
 				expect.objectContaining({
 					formContent: JSON.stringify(invalidForm),
-					schemaErrors: expectedValidationErrors(invalidForm),
+					schemaErrors: JSON.stringify(expectedValidationErrors(invalidForm)),
 					runtimeErrors: null,
 				}),
 			);
