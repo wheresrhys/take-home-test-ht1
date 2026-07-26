@@ -1,6 +1,8 @@
 import express from "express";
 
 import { ingestFormController } from "./controllers/ingest";
+import { asyncHandler } from "./lib/asyncHandler";
+import { errorHandler } from "./lib/errorHandler";
 
 import { retryFailedForms } from "./controllers/retry";
 
@@ -8,8 +10,11 @@ const app = express();
 
 app.use(express.json());
 
-app.post("/ingest", ingestFormController);
+app.post("/ingest", asyncHandler(ingestFormController));
+app.post("/retry", asyncHandler(retryFailedForms));
 
-app.post("/retry", retryFailedForms);
+app.use(errorHandler);
+
+
 
 export default app;
