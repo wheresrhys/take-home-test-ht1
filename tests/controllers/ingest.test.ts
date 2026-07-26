@@ -125,7 +125,7 @@ describe("POST /ingest", () => {
 				"formerrors",
 				expect.objectContaining({
 					formContent: JSON.stringify(invalidForm),
-					schemaErrors: expectedValidationErrors(invalidForm),
+					schemaErrors: JSON.stringify(expectedValidationErrors(invalidForm)),
 					runtimeErrors: null,
 				}),
 			);
@@ -282,12 +282,12 @@ describe("POST /ingest", () => {
 			});
 		});
 
-		describe("an error before application_reference is known (malformed JSON body)", () => {
+		describe("an error before applicationReferences is known (malformed JSON body)", () => {
 			function postMalformedJson() {
 				return request(app).post("/ingest").set("Content-Type", "application/json").send("{not-json");
 			}
 
-			it("logs the error with application_reference: null when the failure happens before the reference is parsed", async () => {
+			it("logs the error with applicationReference: null when the failure happens before the reference is parsed", async () => {
 				await postMalformedJson();
 
 				expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -296,7 +296,7 @@ describe("POST /ingest", () => {
 				);
 			});
 
-			it("still writes a FormErrors row with application_reference null, capturing whatever form_content was available", async () => {
+			it("still writes a FormErrors row with applicationReference null, capturing whatever form_content was available", async () => {
 				await postMalformedJson();
 
 				const formErrorsCall = findFormErrorsCreateCall();

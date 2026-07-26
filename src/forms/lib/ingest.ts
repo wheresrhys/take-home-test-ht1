@@ -154,7 +154,6 @@ export async function ingestForm(
 
 		throw error;
 	}
-
 	if (options.sendConfirmationEmail) {
 		sendConfirmationEmailBestEffort(transformedRow.applicationReference);
 	}

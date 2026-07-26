@@ -1,4 +1,4 @@
-import { ingestForm, toFormsRow, transformData } from "../../../src/forms/lib/ingest";
+import { ingestForm, transformData } from "../../../src/forms/lib/ingest";
 import { validateIngestedForm } from "../../../src/forms/lib/validator";
 import { lookupPostcode } from "../../../src/providers/idealpostcodes";
 import { postgresClient } from "../../../src/providers/postgres-client";
@@ -77,7 +77,7 @@ describe("ingestForm", () => {
 		await ingestForm(validForm);
 
 		expect(mockedLookupPostcode).toHaveBeenCalledWith(validForm.address.postcode);
-		expect(mockedCreate).toHaveBeenCalledWith("forms", toFormsRow(transformData(validForm, GEOCODE_RESULT)));
+		expect(mockedCreate).toHaveBeenCalledWith("forms", transformData(validForm, GEOCODE_RESULT));
 	});
 
 	describe("when create() rejects with a unique-violation on application_reference", () => {
