@@ -85,12 +85,17 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `{ statusCode, errors: string[] }` on failure (no `data` key) — so callers narrow via
   `'data' in result` / `'errors' in result` rather than checking whether `errors` is
   undefined/empty. Happy path (I3): I1 validation → `idealpostcodes.lookupPostcode` on the
-  postcode → `transformData` → `postgresClient.create("forms", transformedRow)` →
-  `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`. Schema-invalid path
+  postcode → `transformData` → `postgresClient.create("forms", toFormsRow(transformedRow))` →
+  `{ statusCode: 201, data: { id: transformedRow.applicationReference } }`. `transformData` yields
+  the camelCase outbound shape; `toFormsRow` (same file) is the persistence boundary that maps it
+  onto the `forms` table's snake_case column names — without it, `create` builds
+  `INSERT INTO forms (sessionId, ...)`, whose unquoted identifiers fold to `sessionid` and no such
+  column exists. Schema-invalid path
   (I4): on I1 validator failure, before returning `{ statusCode: 400, errors }`, writes a
   `FormErrors` row via `postgresClient.create("formerrors", { application_reference, form_content,
-  schema_errors, runtime_errors: null })` — `form_content` is the raw submitted `data` unmodified,
-  `schema_errors` is the validator's error array, and `application_reference` is defensively
+  schema_errors, runtime_errors: null })` — `form_content` (the raw submitted `data`) and
+  `schema_errors` (the validator's error array) are `JSON.stringify`'d for their JSONB columns
+  (a raw JS array would be sent as a Postgres array literal, invalid JSON for JSONB), and `application_reference` is defensively
   extracted from the unvalidated payload (coerced to a string when truthy but not already a
   string, `null` when missing/falsy) so the row is written even when validation itself failed
   on that field — captured so the record can be fixed and replayed via `/retry` (R1) after a
@@ -137,7 +142,11 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `createPostgresPool()`/the singleton with `pg` mocked; `tests/providers/postgres-client-crud.test.ts`
   integration-tests `create`/`getRecords`/`delete` against the real docker DB (kept in a separate
   file since the two approaches — mocked vs real `pg` — can't coexist in one jest file once `pg`
-  is auto-mocked at the top).
+  is auto-mocked at the top). `tests/e2e/ingest.e2e.test.ts` drives the real app through
+  `supertest` against the real docker DB (only `idealpostcodes`/`sendgrid` mocked), proving the
+  persistence contract the mocked BDD suites assume (happy path, 409 conflict, 400 schema error).
+  Like the crud suite it never `TRUNCATE`s the shared DB — it uses a unique `application_reference`
+  per test with reference-scoped assertions and per-row teardown, so it's parallel-worker-safe.
 - `db/schema/` — one `.sql` file per schema object (table, role, etc), applied by
   `npm run db:start` in **filename-sort order** via `db/apply-schema.sh`. Prefix files if
   ordering matters, relative to the existing uppercase-leading names (e.g.
