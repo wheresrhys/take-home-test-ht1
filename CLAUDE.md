@@ -55,7 +55,11 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   shape. An empty `references` array short-circuits to `200 []` before any DB/ingest call. For
   each reference it fetches the matching `FormErrors` row (`getRecords("formerrors",
   "application_reference", references)`), replays `form_content` through the same `ingestForm`
-  (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — as one independent
+  (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — passing
+  `{ sendConfirmationEmail: true }` (same option `/ingest` passes, per review feedback on #41 —
+  a form that succeeds on retry now gets the same best-effort confirmation email to
+  happyforms@bots.com as one that succeeds first time; still not sent when a retried reference
+  still fails or doesn't match a `FormErrors` row) — as one independent
   promise per reference inside a single `Promise.allSettled` (so one still-failing reference
   never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
   only when ingest succeeds. On a still-failing retry, the row is **not** left untouched: it
@@ -118,10 +122,11 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   product decision to defer the README's "guaranteed" wording. A non-2xx response or a rejection
   is caught via `.then`/`.catch` and logged (`console.error`, with `application_reference`); the
   already-returned success response is never altered and no `FormErrors` row is written. No email
-  on the 400/5xx branches, or when the flag is falsy/omitted (the default — e.g. `/retry`'s
-  replay call doesn't pass it, so retried forms never re-trigger a confirmation email).
-  `src/controllers/ingest.ts` passes `{ sendConfirmationEmail: true }` so real `/ingest` traffic
-  gets the email.
+  on the 400/5xx branches, or when the flag is falsy/omitted (the default — nothing currently
+  omits it deliberately; both real call sites opt in). `src/controllers/ingest.ts` and
+  `src/controllers/retry.ts`'s per-reference replay both pass `{ sendConfirmationEmail: true }`,
+  so a form that succeeds on either its first `/ingest` attempt or a later `/retry` gets the
+  confirmation email.
 - `src/providers/` — external-system stubs. Each returns `HttpResponse<T>` (`httpresponse.ts`).
   - `idealpostcodes.ts` — `lookupPostcode` geocoder; **fails ~5% of calls** (returns 500) by design.
   - `sendgrid.ts` — `sendEmail`; also **fails ~5%** by design.
