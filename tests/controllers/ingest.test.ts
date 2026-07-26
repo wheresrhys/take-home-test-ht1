@@ -77,24 +77,24 @@ describe("POST /ingest", () => {
 			expect(mockedLookupPostcode).toHaveBeenCalledWith("E15 4BZ");
 		});
 
-		it("calls the db client's create with table 'forms' and the transformed row", async () => {
+		it("calls the db client's create with table 'forms' and the transformed row mapped to snake_case columns", async () => {
 			await postIngest(buildIngestedForm());
 
 			expect(mockedCreate).toHaveBeenCalledWith(
 				"forms",
 				expect.objectContaining({
-					sessionId: "session-1",
-					applicationReference: "GRU-123089-2026",
-					firstName: "John",
-					lastName: "Doe",
+					session_id: "session-1",
+					application_reference: "GRU-123089-2026",
+					first_name: "John",
+					last_name: "Doe",
 					email: "john.doe@example.com",
 					gender: "male",
-					dateOfBirth: new Date("1990-01-01"),
-					phoneNumber: "07123456789",
-					mobileNumber: "07000000000",
-					addressLine1: "Stratford Village Surgery",
-					addressLine2: "50C Romford Road",
-					addressLine3: "London",
+					date_of_birth: new Date("1990-01-01"),
+					phone_number: "07123456789",
+					mobile_number: "07000000000",
+					address_line_1: "Stratford Village Surgery",
+					address_line_2: "50C Romford Road",
+					address_line_3: "London",
 					postcode: "E15 4BZ",
 					country: "United Kingdom",
 					longitude: GEOCODE_RESULT.longitude,
@@ -111,7 +111,7 @@ describe("POST /ingest", () => {
 			expect(response.status).toBe(400);
 		});
 
-		it("writes a FormErrors row: form_content = submitted data, schema_errors = validator errors, runtime_errors = null", async () => {
+		it("writes a FormErrors row: form_content = submitted data, schema_errors = validator errors, runtime_errors = null (JSONB values JSON-encoded)", async () => {
 			const invalidForm = buildIngestedForm({ email: undefined });
 
 			await postIngest(invalidForm);
@@ -119,8 +119,8 @@ describe("POST /ingest", () => {
 			expect(mockedCreate).toHaveBeenCalledWith(
 				"formerrors",
 				expect.objectContaining({
-					form_content: JSON.parse(JSON.stringify(invalidForm)),
-					schema_errors: expectedValidationErrors(invalidForm),
+					form_content: JSON.stringify(JSON.parse(JSON.stringify(invalidForm))),
+					schema_errors: JSON.stringify(expectedValidationErrors(invalidForm)),
 					runtime_errors: null,
 				}),
 			);
@@ -148,7 +148,10 @@ describe("POST /ingest", () => {
 				const response = await postIngest({});
 
 				expect(response.status).toBe(400);
-				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ form_content: {} }));
+				expect(mockedCreate).toHaveBeenCalledWith(
+					"formerrors",
+					expect.objectContaining({ form_content: JSON.stringify({}) }),
+				);
 			});
 		});
 

@@ -1,4 +1,4 @@
-import { ingestForm, transformData } from "../../../src/forms/lib/ingest";
+import { ingestForm, toFormsRow, transformData } from "../../../src/forms/lib/ingest";
 import { validateIngestedForm } from "../../../src/forms/lib/validator";
 import { lookupPostcode } from "../../../src/providers/idealpostcodes";
 import { postgresClient } from "../../../src/providers/postgres-client";
@@ -70,14 +70,14 @@ describe("ingestForm", () => {
 		expect("data" in result && result.data).toEqual({ id: validForm.application_reference });
 	});
 
-	it("geocodes the submitted postcode and persists the transformed row via postgresClient.create", async () => {
+	it("geocodes the submitted postcode and persists the transformed row (mapped to snake_case columns) via postgresClient.create", async () => {
 		mockedValidateIngestedForm.mockReturnValue({ valid: true, errors: [] });
 		const validForm = buildValidIngestedForm();
 
 		await ingestForm(validForm);
 
 		expect(mockedLookupPostcode).toHaveBeenCalledWith(validForm.address.postcode);
-		expect(mockedCreate).toHaveBeenCalledWith("forms", transformData(validForm, GEOCODE_RESULT));
+		expect(mockedCreate).toHaveBeenCalledWith("forms", toFormsRow(transformData(validForm, GEOCODE_RESULT)));
 	});
 
 	describe("when create() rejects with a unique-violation on application_reference", () => {
