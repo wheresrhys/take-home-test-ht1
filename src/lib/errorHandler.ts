@@ -19,9 +19,9 @@ function extractApplicationReference(req: Request): string | null {
 async function writeFormError(req: Request, applicationReference: string | null, error: Error): Promise<void> {
 	try {
 		await postgresClient.create("formerrors", {
-			application_reference: applicationReference,
-			form_content: JSON.stringify(req.body),
-			runtime_errors: JSON.stringify({ message: error.message, stack: error.stack }),
+			applicationReference: applicationReference,
+			formContent: JSON.stringify(req.body),
+			runtimeErrors: JSON.stringify({ message: error.message, stack: error.stack }),
 		});
 	} catch (writeError) {
 		console.error("Failed to write FormErrors row for a runtime error", {
