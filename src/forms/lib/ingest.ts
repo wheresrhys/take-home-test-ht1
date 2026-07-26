@@ -3,6 +3,10 @@ import { IngestedFormSchema } from "../schemas/ingested_schema";
 import { TransformedFormSchema } from "../schemas/transformed_schema";
 import { lookupPostcode } from "../../providers/idealpostcodes";
 import { postgresClient } from "../../providers/postgres-client";
+import { sendEmail } from "../../providers/sendgrid";
+
+const CONFIRMATION_EMAIL_RECIPIENT = "happyforms@bots.com";
+const CONFIRMATION_EMAIL_SENDER = "no-reply@healthtech-1.com";
 
 // Discriminated union: success and failure are mutually exclusive at the type level.
 // A success result never carries `errors`; a failure result never carries `data`.
@@ -73,7 +77,46 @@ export function transformData(
 	};
 }
 
-export async function ingestForm(data: unknown): Promise<IngestResult<{ id: string }>> {
+// Options object (2nd param): currently just the confirmation-email opt-in flag, deferred here
+// from I2 so future ingestForm options (e.g. skip-geocode-cache, dry-run) have a settled home
+// rather than growing the positional-argument list.
+export type IngestFormOptions = {
+	sendConfirmationEmail?: boolean;
+};
+
+// Fire-and-forget: deliberately not awaited by the caller. The README calls this email
+// "guaranteed", but per the ticket's logged product decision, guaranteed delivery (retry via
+// FormErrors) is out of scope for now — a failed send is logged with application_reference and
+// otherwise dropped, so it never blocks or alters the already-decided success response.
+// sendEmail is documented not to throw, but the .catch is kept as a defensive backstop against
+// an unhandled rejection escaping this un-awaited call.
+function sendConfirmationEmailBestEffort(applicationReference: string): void {
+	sendEmail({
+		to: CONFIRMATION_EMAIL_RECIPIENT,
+		from: CONFIRMATION_EMAIL_SENDER,
+		subject: `Form ingested: ${applicationReference}`,
+		body: `Form with application reference ${applicationReference} was successfully ingested.`,
+	})
+		.then((response) => {
+			if (response.statusCode < 200 || response.statusCode >= 300) {
+				console.error("Failed to send confirmation email", {
+					applicationReference,
+					statusCode: response.statusCode,
+				});
+			}
+		})
+		.catch((error) => {
+			console.error("Failed to send confirmation email", {
+				applicationReference,
+				message: error instanceof Error ? error.message : String(error),
+			});
+		});
+}
+
+export async function ingestForm(
+	data: unknown,
+	options: IngestFormOptions = {},
+): Promise<IngestResult<{ id: string }>> {
 	const validationResult = validateIngestedForm(data);
 
 	if (!validationResult.valid) {
@@ -106,6 +149,10 @@ export async function ingestForm(data: unknown): Promise<IngestResult<{ id: stri
 		}
 
 		throw error;
+	}
+
+	if (options.sendConfirmationEmail) {
+		sendConfirmationEmailBestEffort(transformedRow.applicationReference);
 	}
 
 	return { statusCode: 201, data: { id: transformedRow.applicationReference } };

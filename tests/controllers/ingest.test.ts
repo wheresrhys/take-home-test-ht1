@@ -2,6 +2,7 @@ import request from "supertest";
 import { DatabaseError } from "pg";
 
 jest.mock("../../src/providers/idealpostcodes");
+jest.mock("../../src/providers/sendgrid");
 // isDatabaseError is reimplemented here (rather than jest.requireActual'd) so this suite never
 // loads the real postgres-client module — that module builds a live pg Pool from env vars at
 // import time, which this mocked-DB suite has no need for. The logic mirrors the real guard
@@ -13,10 +14,12 @@ jest.mock("../../src/providers/postgres-client", () => ({
 
 import app from "../../src/app";
 import { lookupPostcode } from "../../src/providers/idealpostcodes";
+import { sendEmail } from "../../src/providers/sendgrid";
 import { postgresClient } from "../../src/providers/postgres-client";
 import { validateIngestedForm } from "../../src/forms/lib/validator";
 
 const mockedLookupPostcode = lookupPostcode as jest.MockedFunction<typeof lookupPostcode>;
+const mockedSendEmail = sendEmail as jest.MockedFunction<typeof sendEmail>;
 const mockedCreate = postgresClient.create as jest.Mock;
 
 const GEOCODE_RESULT = { latitude: -5.05, longitude: 50.05 };
@@ -57,6 +60,7 @@ describe("POST /ingest", () => {
 	beforeEach(() => {
 		mockedLookupPostcode.mockResolvedValue({ statusCode: 200, body: GEOCODE_RESULT });
 		mockedCreate.mockResolvedValue({});
+		mockedSendEmail.mockResolvedValue({ statusCode: 200, body: undefined });
 	});
 
 	afterEach(() => {
@@ -325,6 +329,58 @@ describe("POST /ingest", () => {
 
 			expect(mockedCreate).toHaveBeenCalledTimes(1);
 			expect(mockedCreate).not.toHaveBeenCalledWith("formerrors", expect.anything());
+		});
+	});
+
+	describe("POST /ingest — confirmation email (I7)", () => {
+		describe("when the form is ingested successfully (201)", () => {
+			it("sends a confirmation email via sendgrid to happyforms@bots.com", async () => {
+				await postIngest(buildIngestedForm());
+
+				expect(mockedSendEmail).toHaveBeenCalledWith(
+					expect.objectContaining({ to: "happyforms@bots.com" }),
+				);
+			});
+
+			it("returns the HTTP response without waiting on the confirmation email to resolve", async () => {
+				// Never resolves — if ingestForm awaited this before returning, the request
+				// below would hang and the test would time out instead of completing promptly.
+				mockedSendEmail.mockReturnValue(new Promise(() => {}));
+
+				const response = await postIngest(buildIngestedForm());
+
+				expect(response.status).toBe(201);
+			});
+		});
+
+		describe("when the request fails schema validation (400, user error)", () => {
+			it("does not send a confirmation email", async () => {
+				await postIngest(buildIngestedForm({ email: undefined }));
+
+				expect(mockedSendEmail).not.toHaveBeenCalled();
+			});
+		});
+
+		describe("when ingestion fails with a server error (5xx)", () => {
+			let consoleErrorSpy: jest.SpyInstance;
+
+			beforeEach(() => {
+				consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+				// Same malformed-geocode-response trick the "error handling" suite above uses to
+				// force ingestForm to throw and the middleware to respond 500.
+				mockedLookupPostcode.mockResolvedValue({ statusCode: 200, body: undefined });
+			});
+
+			afterEach(() => {
+				consoleErrorSpy.mockRestore();
+			});
+
+			it("does not send a confirmation email", async () => {
+				const response = await postIngest(buildIngestedForm());
+
+				expect(response.status).toBe(500);
+				expect(mockedSendEmail).not.toHaveBeenCalled();
+			});
 		});
 	});
 });
