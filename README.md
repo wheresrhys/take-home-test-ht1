@@ -1,11 +1,18 @@
 # take-home-test
 
+## Running the solution
+- Install [Docker](https://docs.docker.com/get-docker/).
+- Run `npm run db:start` to provision a local Postgres via Docker Compose, using the throwaway dev credentials committed in `.env.local`.
+- Run `npm run test` to run tests
+- Run `npm run build && npm run start` to run the server
+
+
 At Healthtech-1, one of our core responsibilities is to ingest registration forms, transform them, update some external systems and get them ready for future processing (by the FORM-BOT).
 We are sent these forms by a particularly unreliable 3rd party - we should expect them to make schema changes without informing us, send duplicate forms, or generally just be badly behaved!
 As this is important healthcare data, we need to design our systems to be resilient to these kinds of errors.
 
 Your task is to code a system for ingesting and processing these forms. For a form to become ready for our bots, it will need to:
-- Be ingested into a database (via an `/ingest` endpoint). 
+- Be ingested into a database (via an `/ingest` endpoint).
 - Conform to the schema we've currently agreed with the external provider. This schema is found in `ingested_schema.ts` (but unfortunately the data source isn't 100% reliable and schema changes aren't always communicated in a timely fashion!)
 - Have a longitude and latitude so that we have specific address information for the FORM-BOT. A mock implementation of a geocoding API (to transform the postcode into lat/long) is provided.
 - Be transformed into the schema found in `transformed_schema.ts`.
@@ -17,10 +24,7 @@ Some additional notes on the system
 - We should never give the FORM-BOT the same form twice
 - If the transform is successful, we should send a guaranteed email to our team happyforms@bots.com that a form was ingested
 
-Local development
-- Install [Docker](https://docs.docker.com/get-docker/).
-- Run `npm run db:start` to provision a local Postgres via Docker Compose, using the
-  throwaway dev credentials committed in `.env.local`.
+
 
 Some notes on this take home
 - We expect you to add some basic tests to your code
