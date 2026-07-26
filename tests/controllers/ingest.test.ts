@@ -81,7 +81,7 @@ describe("POST /ingest", () => {
 			expect(mockedLookupPostcode).toHaveBeenCalledWith("E15 4BZ");
 		});
 
-		it("calls the db client's create with table 'forms' and the transformed row mapped to snake_case columns", async () => {
+		it("calls the db client's create with table 'forms' and the transformed row", async () => {
 			await postIngest(buildIngestedForm());
 
 			expect(mockedCreate).toHaveBeenCalledWith(
