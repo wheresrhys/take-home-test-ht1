@@ -73,7 +73,17 @@ export function transformData(
 	};
 }
 
-export async function ingestForm(data: unknown): Promise<IngestResult<{ id: string }>> {
+// Options object (2nd param): currently just the confirmation-email opt-in flag, deferred here
+// from I2 so future ingestForm options (e.g. skip-geocode-cache, dry-run) have a settled home
+// rather than growing the positional-argument list.
+export type IngestFormOptions = {
+	sendConfirmationEmail?: boolean;
+};
+
+export async function ingestForm(
+	data: unknown,
+	options: IngestFormOptions = {},
+): Promise<IngestResult<{ id: string }>> {
 	const validationResult = validateIngestedForm(data);
 
 	if (!validationResult.valid) {
