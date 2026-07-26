@@ -111,7 +111,7 @@ describe("POST /ingest", () => {
 			expect(response.status).toBe(400);
 		});
 
-		it("writes a FormErrors row: form_content = submitted data, schema_errors = validator errors, runtime_errors = null", async () => {
+		it("writes a FormErrors row: formContent = submitted data, schemaErrors = validator errors, runtimeErrors = null", async () => {
 			const invalidForm = buildIngestedForm({ email: undefined });
 
 			await postIngest(invalidForm);
@@ -119,9 +119,9 @@ describe("POST /ingest", () => {
 			expect(mockedCreate).toHaveBeenCalledWith(
 				"formerrors",
 				expect.objectContaining({
-					form_content: JSON.parse(JSON.stringify(invalidForm)),
-					schema_errors: expectedValidationErrors(invalidForm),
-					runtime_errors: null,
+					formContent: JSON.parse(JSON.stringify(invalidForm)),
+					schemaErrors: expectedValidationErrors(invalidForm),
+					runtimeErrors: null,
 				}),
 			);
 		});
@@ -144,30 +144,30 @@ describe("POST /ingest", () => {
 
 
 		describe("empty request body ({})", () => {
-			it("returns 400 and writes FormErrors with form_content = {}", async () => {
+			it("returns 400 and writes FormErrors with formContent = {}", async () => {
 				const response = await postIngest({});
 
 				expect(response.status).toBe(400);
-				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ form_content: {} }));
+				expect(mockedCreate).toHaveBeenCalledWith("formerrors", expect.objectContaining({ formContent: {} }));
 			});
 		});
 
 		describe("application_reference missing/not a string", () => {
-			it("writes FormErrors with application_reference = null when missing", async () => {
+			it("writes FormErrors with applicationReference = null when missing", async () => {
 				await postIngest(buildIngestedForm({ application_reference: undefined }));
 
 				expect(mockedCreate).toHaveBeenCalledWith(
 					"formerrors",
-					expect.objectContaining({ application_reference: null }),
+					expect.objectContaining({ applicationReference: null }),
 				);
 			});
 
-			it("writes FormErrors with application_reference coerced to a string when not a string", async () => {
+			it("writes FormErrors with applicationReference coerced to a string when not a string", async () => {
 				await postIngest(buildIngestedForm({ application_reference: 12345 }));
 
 				expect(mockedCreate).toHaveBeenCalledWith(
 					"formerrors",
-					expect.objectContaining({ application_reference: "12345" }),
+					expect.objectContaining({ applicationReference: "12345" }),
 				);
 			});
 		});
@@ -229,17 +229,17 @@ describe("POST /ingest", () => {
 				);
 			});
 
-			it("writes a FormErrors row with runtime_errors populated and schema_errors left blank", async () => {
+			it("writes a FormErrors row with runtimeErrors populated and schemaErrors left blank", async () => {
 				await postIngest(buildIngestedForm());
 
 				const formErrorsCall = findFormErrorsCreateCall();
 
 				expect(formErrorsCall).toBeDefined();
 				expect(formErrorsCall?.[1]).toMatchObject({
-					application_reference: "GRU-123089-2026",
-					runtime_errors: expect.any(String),
+					applicationReference: "GRU-123089-2026",
+					runtimeErrors: expect.any(String),
 				});
-				expect(formErrorsCall?.[1]).not.toHaveProperty("schema_errors");
+				expect(formErrorsCall?.[1]).not.toHaveProperty("schemaErrors");
 			});
 		});
 
@@ -295,8 +295,8 @@ describe("POST /ingest", () => {
 
 				expect(formErrorsCall).toBeDefined();
 				expect(formErrorsCall?.[1]).toMatchObject({
-					application_reference: null,
-					form_content: expect.any(String),
+					applicationReference: null,
+					formContent: expect.any(String),
 				});
 			});
 

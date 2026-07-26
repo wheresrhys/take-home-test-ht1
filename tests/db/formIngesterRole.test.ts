@@ -5,6 +5,8 @@ dotenv.config({ path: ".env.local", quiet: true });
 
 // Security-adjacent (privilege boundaries), so this exercises the real docker DB rather
 // than mocking `pg` — run `npm run db:start` before `npm test` for this suite to pass.
+// Raw SQL here quotes every camelCase column identifier, matching db/schema/*.sql — unquoted
+// they would fold to lowercase and fail to resolve.
 
 const adminClient = new Client({
 	host: process.env.POSTGRES_HOST,
@@ -24,16 +26,16 @@ const formIngesterClient = new Client({
 
 function buildFormsRow(applicationReference: string) {
 	return {
-		session_id: "session-1",
-		application_reference: applicationReference,
-		first_name: "Ada",
-		last_name: "Lovelace",
+		sessionId: "session-1",
+		applicationReference: applicationReference,
+		firstName: "Ada",
+		lastName: "Lovelace",
 		email: "ada@example.com",
 		gender: "female",
-		date_of_birth: "1990-01-01",
-		mobile_number: "07000000000",
-		address_line_1: "1 Test Street",
-		address_line_2: "Testville",
+		dateOfBirth: "1990-01-01",
+		mobileNumber: "07000000000",
+		addressLine1: "1 Test Street",
+		addressLine2: "Testville",
 		postcode: "AB1 2CD",
 		country: "UK",
 		longitude: -0.1,
@@ -41,40 +43,42 @@ function buildFormsRow(applicationReference: string) {
 	};
 }
 
+const INSERT_FORMS_SQL = `INSERT INTO forms (
+	"sessionId", "applicationReference", "firstName", "lastName", "email", "gender",
+	"dateOfBirth", "mobileNumber", "addressLine1", "addressLine2", "postcode",
+	"country", "longitude", "latitude"
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`;
+
+function formsRowValues(row: ReturnType<typeof buildFormsRow>): unknown[] {
+	return [
+		row.sessionId,
+		row.applicationReference,
+		row.firstName,
+		row.lastName,
+		row.email,
+		row.gender,
+		row.dateOfBirth,
+		row.mobileNumber,
+		row.addressLine1,
+		row.addressLine2,
+		row.postcode,
+		row.country,
+		row.longitude,
+		row.latitude,
+	];
+}
+
 async function insertFormsRowAsAdmin(applicationReference: string): Promise<void> {
-	const row = buildFormsRow(applicationReference);
-	await adminClient.query(
-		`INSERT INTO forms (
-			session_id, application_reference, first_name, last_name, email, gender,
-			date_of_birth, mobile_number, address_line_1, address_line_2, postcode,
-			country, longitude, latitude
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-		[
-			row.session_id,
-			row.application_reference,
-			row.first_name,
-			row.last_name,
-			row.email,
-			row.gender,
-			row.date_of_birth,
-			row.mobile_number,
-			row.address_line_1,
-			row.address_line_2,
-			row.postcode,
-			row.country,
-			row.longitude,
-			row.latitude,
-		],
-	);
+	await adminClient.query(INSERT_FORMS_SQL, formsRowValues(buildFormsRow(applicationReference)));
 }
 
 async function deleteFormsRowAsAdmin(applicationReference: string): Promise<void> {
-	await adminClient.query("DELETE FROM forms WHERE application_reference = $1", [applicationReference]);
+	await adminClient.query('DELETE FROM forms WHERE "applicationReference" = $1', [applicationReference]);
 }
 
 async function insertFormErrorAsAdmin(applicationReference: string): Promise<number> {
 	const result = await adminClient.query(
-		"INSERT INTO formerrors (application_reference, form_content) VALUES ($1, $2) RETURNING id",
+		'INSERT INTO formerrors ("applicationReference", "formContent") VALUES ($1, $2) RETURNING id',
 		[applicationReference, JSON.stringify({ example: true })],
 	);
 	return result.rows[0].id;
@@ -101,11 +105,11 @@ describe("form_ingester role", () => {
 			await insertFormsRowAsAdmin(applicationReference);
 
 			const result = await formIngesterClient.query(
-				"SELECT application_reference FROM forms WHERE application_reference = $1",
+				'SELECT "applicationReference" FROM forms WHERE "applicationReference" = $1',
 				[applicationReference],
 			);
 
-			expect(result.rows).toEqual([{ application_reference: applicationReference }]);
+			expect(result.rows).toEqual([{ applicationReference: applicationReference }]);
 
 			await deleteFormsRowAsAdmin(applicationReference);
 		});
@@ -114,32 +118,10 @@ describe("form_ingester role", () => {
 			const applicationReference = "form-ingester-role-test-insert";
 			const row = buildFormsRow(applicationReference);
 
-			await formIngesterClient.query(
-				`INSERT INTO forms (
-					session_id, application_reference, first_name, last_name, email, gender,
-					date_of_birth, mobile_number, address_line_1, address_line_2, postcode,
-					country, longitude, latitude
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-				[
-					row.session_id,
-					row.application_reference,
-					row.first_name,
-					row.last_name,
-					row.email,
-					row.gender,
-					row.date_of_birth,
-					row.mobile_number,
-					row.address_line_1,
-					row.address_line_2,
-					row.postcode,
-					row.country,
-					row.longitude,
-					row.latitude,
-				],
-			);
+			await formIngesterClient.query(INSERT_FORMS_SQL, formsRowValues(row));
 
 			const result = await adminClient.query(
-				"SELECT application_reference FROM forms WHERE application_reference = $1",
+				'SELECT "applicationReference" FROM forms WHERE "applicationReference" = $1',
 				[applicationReference],
 			);
 			expect(result.rowCount).toBe(1);
@@ -151,15 +133,15 @@ describe("form_ingester role", () => {
 			const applicationReference = "form-ingester-role-test-update";
 			await insertFormsRowAsAdmin(applicationReference);
 
-			await formIngesterClient.query("UPDATE forms SET first_name = $1 WHERE application_reference = $2", [
+			await formIngesterClient.query('UPDATE forms SET "firstName" = $1 WHERE "applicationReference" = $2', [
 				"Grace",
 				applicationReference,
 			]);
 
-			const result = await adminClient.query("SELECT first_name FROM forms WHERE application_reference = $1", [
+			const result = await adminClient.query('SELECT "firstName" FROM forms WHERE "applicationReference" = $1', [
 				applicationReference,
 			]);
-			expect(result.rows[0].first_name).toBe("Grace");
+			expect(result.rows[0].firstName).toBe("Grace");
 
 			await deleteFormsRowAsAdmin(applicationReference);
 		});
@@ -168,9 +150,9 @@ describe("form_ingester role", () => {
 			const applicationReference = "form-ingester-role-test-delete";
 			await insertFormsRowAsAdmin(applicationReference);
 
-			await formIngesterClient.query("DELETE FROM forms WHERE application_reference = $1", [applicationReference]);
+			await formIngesterClient.query('DELETE FROM forms WHERE "applicationReference" = $1', [applicationReference]);
 
-			const result = await adminClient.query("SELECT 1 FROM forms WHERE application_reference = $1", [
+			const result = await adminClient.query('SELECT 1 FROM forms WHERE "applicationReference" = $1', [
 				applicationReference,
 			]);
 			expect(result.rowCount).toBe(0);
@@ -180,7 +162,7 @@ describe("form_ingester role", () => {
 	describe("FormErrors table", () => {
 		it("can INSERT and receive an auto-generated id", async () => {
 			const result = await formIngesterClient.query(
-				"INSERT INTO formerrors (application_reference, form_content) VALUES ($1, $2) RETURNING id",
+				'INSERT INTO formerrors ("applicationReference", "formContent") VALUES ($1, $2) RETURNING id',
 				["form-ingester-role-test-formerrors-insert", JSON.stringify({ example: true })],
 			);
 
@@ -195,12 +177,12 @@ describe("form_ingester role", () => {
 			const selectResult = await formIngesterClient.query("SELECT id FROM formerrors WHERE id = $1", [id]);
 			expect(selectResult.rowCount).toBe(1);
 
-			await formIngesterClient.query("UPDATE formerrors SET schema_errors = $1 WHERE id = $2", [
+			await formIngesterClient.query('UPDATE formerrors SET "schemaErrors" = $1 WHERE id = $2', [
 				JSON.stringify(["oops"]),
 				id,
 			]);
-			const updateResult = await adminClient.query("SELECT schema_errors FROM formerrors WHERE id = $1", [id]);
-			expect(updateResult.rows[0].schema_errors).toEqual(["oops"]);
+			const updateResult = await adminClient.query('SELECT "schemaErrors" FROM formerrors WHERE id = $1', [id]);
+			expect(updateResult.rows[0].schemaErrors).toEqual(["oops"]);
 
 			await formIngesterClient.query("DELETE FROM formerrors WHERE id = $1", [id]);
 			const deleteResult = await adminClient.query("SELECT 1 FROM formerrors WHERE id = $1", [id]);

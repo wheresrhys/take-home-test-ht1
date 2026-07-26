@@ -2,14 +2,20 @@ import dotenv from "dotenv";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-// Integration tests for the create/getRecords/delete methods attached to the postgresClient
-// singleton. These build and run real SQL, so — unlike tests/providers/postgres-client.test.ts,
-// which mocks `pg` to unit test createPostgresPool()'s env-var handling — this suite exercises
-// the real docker DB. Run `npm run db:start` before `npm test` for this suite to pass.
+// Integration tests for the create/getRecords/update/delete methods attached to the
+// postgresClient singleton. These build and run real SQL, so — unlike
+// tests/providers/postgres-client.test.ts, which mocks `pg` to unit test createPostgresPool()'s
+// env-var handling — this suite exercises the real docker DB. Run `npm run db:start` before
+// `npm test` for this suite to pass.
+//
+// Columns are quoted camelCase (see db/schema/Forms.sql / FormErrors.sql). The postgres client
+// quotes every column identifier so these camelCase columns resolve instead of folding to
+// lowercase — the describe("postgres-client column quoting") block below is the explicit
+// regression guard for that fold-prone bug class.
 //
 // Jest runs test files in parallel workers against the *same* live DB, so this suite must never
 // table-wide TRUNCATE (that would clobber rows tests/db/formIngesterRole.test.ts is mid-flight
-// with). Instead every test uses unique application_references and registers exactly the rows it
+// with). Instead every test uses unique applicationReferences and registers exactly the rows it
 // creates for individual teardown in afterEach.
 //
 // postgresClient is a singleton built at module load time from env vars, so it's required here
@@ -18,15 +24,15 @@ dotenv.config({ path: ".env.local", quiet: true });
 const { postgresClient } = require("../../src/providers/postgres-client") as typeof import("../../src/providers/postgres-client");
 
 interface FormsRow {
-	session_id: string;
-	application_reference: string;
-	first_name: string;
-	last_name: string;
+	sessionId: string;
+	applicationReference: string;
+	firstName: string;
+	lastName: string;
 	email: string;
 	gender: string;
-	mobile_number: string;
-	address_line_1: string;
-	address_line_2: string;
+	mobileNumber: string;
+	addressLine1: string;
+	addressLine2: string;
 	postcode: string;
 	country: string;
 	longitude: number;
@@ -35,12 +41,12 @@ interface FormsRow {
 
 interface FormErrorsRow {
 	id: number;
-	application_reference: string | null;
-	form_content: unknown;
-	schema_errors: unknown;
-	runtime_errors: unknown;
-	created_at: string;
-	updated_at: string;
+	applicationReference: string | null;
+	formContent: unknown;
+	schemaErrors: unknown;
+	runtimeErrors: unknown;
+	createdAt: string;
+	updatedAt: string;
 }
 
 // Rows this suite created, torn down individually in afterEach so parallel workers on the same
@@ -51,16 +57,16 @@ const createdFormErrorIds = new Set<number>();
 function buildFormsRow(applicationReference: string): Record<string, unknown> {
 	createdFormsReferences.add(applicationReference);
 	return {
-		session_id: "session-1",
-		application_reference: applicationReference,
-		first_name: "Ada",
-		last_name: "Lovelace",
+		sessionId: "session-1",
+		applicationReference: applicationReference,
+		firstName: "Ada",
+		lastName: "Lovelace",
 		email: "ada@example.com",
 		gender: "female",
-		date_of_birth: "1990-01-01",
-		mobile_number: "07000000000",
-		address_line_1: "1 Test Street",
-		address_line_2: "Testville",
+		dateOfBirth: "1990-01-01",
+		mobileNumber: "07000000000",
+		addressLine1: "1 Test Street",
+		addressLine2: "Testville",
 		postcode: "AB1 2CD",
 		country: "UK",
 		longitude: -0.1,
@@ -73,15 +79,15 @@ function buildFormErrorRow(
 	extraColumns: Record<string, unknown> = {},
 ): Record<string, unknown> {
 	return {
-		application_reference: applicationReference,
-		form_content: JSON.stringify({ example: true }),
+		applicationReference: applicationReference,
+		formContent: JSON.stringify({ example: true }),
 		...extraColumns,
 	};
 }
 
 afterEach(async () => {
 	for (const applicationReference of createdFormsReferences) {
-		await postgresClient.delete("forms", "application_reference", applicationReference);
+		await postgresClient.delete("forms", "applicationReference", applicationReference);
 	}
 	for (const formErrorId of createdFormErrorIds) {
 		await postgresClient.delete("formerrors", "id", formErrorId);
@@ -103,30 +109,30 @@ describe("postgresClient.create", () => {
 		createdFormErrorIds.add(result.id);
 
 		expect(result.id).toEqual(expect.any(Number));
-		expect(result.application_reference).toBe("create-test-formerrors-generated-id");
+		expect(result.applicationReference).toBe("create-test-formerrors-generated-id");
 	});
 
 	it("returns a row shaped like the forms table for a Forms insert", async () => {
 		const result = await postgresClient.create<FormsRow>("forms", buildFormsRow("create-test-forms"));
 
 		expect(result).toMatchObject({
-			application_reference: "create-test-forms",
-			first_name: "Ada",
-			last_name: "Lovelace",
+			applicationReference: "create-test-forms",
+			firstName: "Ada",
+			lastName: "Lovelace",
 		});
 	});
 
 	it("returns the FormErrors columns for a FormErrors insert", async () => {
 		const result = await postgresClient.create<FormErrorsRow>(
 			"formerrors",
-			buildFormErrorRow("create-test-formerrors-columns", { schema_errors: JSON.stringify(["oops"]) }),
+			buildFormErrorRow("create-test-formerrors-columns", { schemaErrors: JSON.stringify(["oops"]) }),
 		);
 		createdFormErrorIds.add(result.id);
 
 		expect(result).toMatchObject({
-			application_reference: "create-test-formerrors-columns",
-			schema_errors: ["oops"],
-			runtime_errors: null,
+			applicationReference: "create-test-formerrors-columns",
+			schemaErrors: ["oops"],
+			runtimeErrors: null,
 		});
 	});
 
@@ -143,15 +149,15 @@ describe("postgresClient.getRecords", () => {
 		await postgresClient.create("forms", buildFormsRow("get-records-1"));
 		await postgresClient.create("forms", buildFormsRow("get-records-2"));
 
-		const results = await postgresClient.getRecords<FormsRow>("forms", "application_reference", [
+		const results = await postgresClient.getRecords<FormsRow>("forms", "applicationReference", [
 			"get-records-1",
 			"get-records-2",
 		]);
 
-		expect(results.map((row) => row.application_reference).sort()).toEqual(["get-records-1", "get-records-2"]);
+		expect(results.map((row) => row.applicationReference).sort()).toEqual(["get-records-1", "get-records-2"]);
 	});
 
-	it("works across idColumn values, e.g. id on FormErrors rather than application_reference", async () => {
+	it("works across idColumn values, e.g. id on FormErrors rather than applicationReference", async () => {
 		const created = await postgresClient.create<FormErrorsRow>(
 			"formerrors",
 			buildFormErrorRow("get-records-formerrors"),
@@ -167,7 +173,7 @@ describe("postgresClient.getRecords", () => {
 	it("resolves with [] and issues no query for an empty ids array", async () => {
 		const querySpy = jest.spyOn(postgresClient, "query");
 
-		const results = await postgresClient.getRecords("forms", "application_reference", []);
+		const results = await postgresClient.getRecords("forms", "applicationReference", []);
 
 		expect(results).toEqual([]);
 		expect(querySpy).not.toHaveBeenCalled();
@@ -176,7 +182,7 @@ describe("postgresClient.getRecords", () => {
 	});
 
 	it("resolves with [] when no rows match", async () => {
-		const results = await postgresClient.getRecords("forms", "application_reference", ["get-records-no-match"]);
+		const results = await postgresClient.getRecords("forms", "applicationReference", ["get-records-no-match"]);
 
 		expect(results).toEqual([]);
 	});
@@ -191,13 +197,13 @@ describe("postgresClient.update", () => {
 		createdFormErrorIds.add(created.id);
 
 		const updated = await postgresClient.update<FormErrorsRow>("formerrors", "id", created.id, {
-			schema_errors: JSON.stringify(["still invalid"]),
+			schemaErrors: JSON.stringify(["still invalid"]),
 		});
 
-		expect(updated.schema_errors).toEqual(["still invalid"]);
+		expect(updated.schemaErrors).toEqual(["still invalid"]);
 	});
 
-	it("bumps updated_at to strictly after the prior value", async () => {
+	it("bumps updatedAt to strictly after the prior value", async () => {
 		const created = await postgresClient.create<FormErrorsRow>(
 			"formerrors",
 			buildFormErrorRow("update-test-bumps-updated-at"),
@@ -205,10 +211,10 @@ describe("postgresClient.update", () => {
 		createdFormErrorIds.add(created.id);
 
 		const updated = await postgresClient.update<FormErrorsRow>("formerrors", "id", created.id, {
-			schema_errors: JSON.stringify(["still invalid"]),
+			schemaErrors: JSON.stringify(["still invalid"]),
 		});
 
-		expect(new Date(updated.updated_at).getTime()).toBeGreaterThan(new Date(created.updated_at).getTime());
+		expect(new Date(updated.updatedAt).getTime()).toBeGreaterThan(new Date(created.updatedAt).getTime());
 	});
 
 	it("updates multiple columns in one call", async () => {
@@ -219,13 +225,13 @@ describe("postgresClient.update", () => {
 		createdFormErrorIds.add(created.id);
 
 		const updated = await postgresClient.update<FormErrorsRow>("formerrors", "id", created.id, {
-			schema_errors: JSON.stringify(["schema oops"]),
-			runtime_errors: JSON.stringify(["runtime oops"]),
+			schemaErrors: JSON.stringify(["schema oops"]),
+			runtimeErrors: JSON.stringify(["runtime oops"]),
 		});
 
 		expect(updated).toMatchObject({
-			schema_errors: ["schema oops"],
-			runtime_errors: ["runtime oops"],
+			schemaErrors: ["schema oops"],
+			runtimeErrors: ["runtime oops"],
 		});
 	});
 
@@ -237,11 +243,11 @@ describe("postgresClient.update", () => {
 		createdFormErrorIds.add(created.id);
 
 		await expect(
-			postgresClient.update("formerrors", "id", -1, { schema_errors: JSON.stringify(["oops"]) }),
+			postgresClient.update("formerrors", "id", -1, { schemaErrors: JSON.stringify(["oops"]) }),
 		).rejects.toThrow(/-1/);
 
 		const results = await postgresClient.getRecords<FormErrorsRow>("formerrors", "id", [created.id]);
-		expect(results[0].schema_errors).toBeNull();
+		expect(results[0].schemaErrors).toBeNull();
 	});
 });
 
@@ -249,12 +255,12 @@ describe("postgresClient.delete", () => {
 	it("removes the single matching row — a follow-up getRecords resolves []", async () => {
 		await postgresClient.create("forms", buildFormsRow("delete-test-existing"));
 
-		await postgresClient.delete("forms", "application_reference", "delete-test-existing");
+		await postgresClient.delete("forms", "applicationReference", "delete-test-existing");
 		// Deleted here already — unregister so afterEach's own teardown delete doesn't
 		// re-attempt it and reject on the now-nonexistent row.
 		createdFormsReferences.delete("delete-test-existing");
 
-		const results = await postgresClient.getRecords("forms", "application_reference", ["delete-test-existing"]);
+		const results = await postgresClient.getRecords("forms", "applicationReference", ["delete-test-existing"]);
 		expect(results).toEqual([]);
 	});
 
@@ -262,10 +268,54 @@ describe("postgresClient.delete", () => {
 		await postgresClient.create("forms", buildFormsRow("delete-test-untouched"));
 
 		await expect(
-			postgresClient.delete("forms", "application_reference", "delete-test-does-not-exist"),
+			postgresClient.delete("forms", "applicationReference", "delete-test-does-not-exist"),
 		).rejects.toThrow(/delete-test-does-not-exist/);
 
-		const results = await postgresClient.getRecords("forms", "application_reference", ["delete-test-untouched"]);
+		const results = await postgresClient.getRecords("forms", "applicationReference", ["delete-test-untouched"]);
 		expect(results).toHaveLength(1);
+	});
+});
+
+// Regression guard for the silent-fold bug class this ticket closes: an unquoted camelCase
+// identifier folds to lowercase (sessionId -> sessionid), which doesn't exist. Every helper here
+// runs against the real DB, so an unquoted identifier would raise a "column does not exist" error
+// rather than pass — these tests prove the client quotes the INSERT column list, WHERE clause,
+// SET clause and RETURNING projection for a fold-prone column.
+describe("postgres-client column quoting", () => {
+	it("Usual: create then getRecords round-trips a row whose columns are camelCase", async () => {
+		await postgresClient.create("forms", buildFormsRow("quoting-round-trip"));
+
+		const results = await postgresClient.getRecords<FormsRow>("forms", "applicationReference", [
+			"quoting-round-trip",
+		]);
+
+		expect(results).toHaveLength(1);
+		expect(results[0].applicationReference).toBe("quoting-round-trip");
+	});
+
+	it("Edge: a fold-prone column (sessionId) is written and read back intact", async () => {
+		await postgresClient.create("forms", { ...buildFormsRow("quoting-sessionid"), sessionId: "fold-prone-session" });
+
+		// getRecords BY the fold-prone column exercises quoting in the WHERE clause too, not just
+		// the INSERT column list — an unquoted "sessionId" here would fold to sessionid and error.
+		const results = await postgresClient.getRecords<FormsRow>("forms", "sessionId", ["fold-prone-session"]);
+
+		const row = results.find((r) => r.applicationReference === "quoting-sessionid");
+		expect(row?.sessionId).toBe("fold-prone-session");
+	});
+
+	it("Structure: update's SET and WHERE quote camelCase identifiers", async () => {
+		const created = await postgresClient.create<FormErrorsRow>(
+			"formerrors",
+			buildFormErrorRow("quoting-update"),
+		);
+		createdFormErrorIds.add(created.id);
+
+		// schemaErrors in SET + id in WHERE + the auto-bumped updatedAt all need quoting.
+		const updated = await postgresClient.update<FormErrorsRow>("formerrors", "id", created.id, {
+			schemaErrors: JSON.stringify(["quoted"]),
+		});
+
+		expect(updated.schemaErrors).toEqual(["quoted"]);
 	});
 });
