@@ -39,6 +39,8 @@ interface FormErrorsRow {
 	form_content: unknown;
 	schema_errors: unknown;
 	runtime_errors: unknown;
+	created_at: string;
+	updated_at: string;
 }
 
 // Rows this suite created, torn down individually in afterEach so parallel workers on the same
@@ -177,6 +179,69 @@ describe("postgresClient.getRecords", () => {
 		const results = await postgresClient.getRecords("forms", "application_reference", ["get-records-no-match"]);
 
 		expect(results).toEqual([]);
+	});
+});
+
+describe("postgresClient.update", () => {
+	it("updates the named column and returns the updated row", async () => {
+		const created = await postgresClient.create<FormErrorsRow>(
+			"formerrors",
+			buildFormErrorRow("update-test-single-column"),
+		);
+		createdFormErrorIds.add(created.id);
+
+		const updated = await postgresClient.update<FormErrorsRow>("formerrors", "id", created.id, {
+			schema_errors: JSON.stringify(["still invalid"]),
+		});
+
+		expect(updated.schema_errors).toEqual(["still invalid"]);
+	});
+
+	it("bumps updated_at to strictly after the prior value", async () => {
+		const created = await postgresClient.create<FormErrorsRow>(
+			"formerrors",
+			buildFormErrorRow("update-test-bumps-updated-at"),
+		);
+		createdFormErrorIds.add(created.id);
+
+		const updated = await postgresClient.update<FormErrorsRow>("formerrors", "id", created.id, {
+			schema_errors: JSON.stringify(["still invalid"]),
+		});
+
+		expect(new Date(updated.updated_at).getTime()).toBeGreaterThan(new Date(created.updated_at).getTime());
+	});
+
+	it("updates multiple columns in one call", async () => {
+		const created = await postgresClient.create<FormErrorsRow>(
+			"formerrors",
+			buildFormErrorRow("update-test-multiple-columns"),
+		);
+		createdFormErrorIds.add(created.id);
+
+		const updated = await postgresClient.update<FormErrorsRow>("formerrors", "id", created.id, {
+			schema_errors: JSON.stringify(["schema oops"]),
+			runtime_errors: JSON.stringify(["runtime oops"]),
+		});
+
+		expect(updated).toMatchObject({
+			schema_errors: ["schema oops"],
+			runtime_errors: ["runtime oops"],
+		});
+	});
+
+	it("rejects when the id matches 0 rows, leaving other rows untouched", async () => {
+		const created = await postgresClient.create<FormErrorsRow>(
+			"formerrors",
+			buildFormErrorRow("update-test-untouched"),
+		);
+		createdFormErrorIds.add(created.id);
+
+		await expect(
+			postgresClient.update("formerrors", "id", -1, { schema_errors: JSON.stringify(["oops"]) }),
+		).rejects.toThrow(/-1/);
+
+		const results = await postgresClient.getRecords<FormErrorsRow>("formerrors", "id", [created.id]);
+		expect(results[0].schema_errors).toBeNull();
 	});
 });
 

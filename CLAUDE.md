@@ -25,7 +25,7 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
 - Jest + ts-jest, supertest for HTTP-level tests.
 - Postgres — provisioned locally via Docker Compose (`npm run db:start`); schema, the
   `form_ingester` role, and the app's `pg` connection pool (`src/providers/postgres-client.ts`),
-  incl. its `create`/`getRecords`/`delete` query methods, are wired up.
+  incl. its `create`/`getRecords`/`update`/`delete` query methods, are wired up.
 
 ## Layout
 
@@ -57,18 +57,27 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   (I2) `/ingest` uses — no duplicated validation/transform/geocode logic — as one independent
   promise per reference inside a single `Promise.allSettled` (so one still-failing reference
   never aborts the batch), and deletes the `FormErrors` row (`delete("formerrors", "id", id)`)
-  only when ingest succeeds. Responds `200` with an array, one entry per input reference,
-  **preserving input order**. Each entry carries its `application_reference` plus a `status`
-  (`{status, application_reference, value}` on success / `{status, application_reference}` on
-  failure); an unmatched reference settles rejected without ever calling the ingest lib or
-  `delete`. Failure reasons are **deliberately withheld from the response** for security/privacy
-  reasons (they can leak validator internals or stack traces) — the exact failure shape a caller
-  should see still needs more thought. Unexpected errors (ingest lib throwing, `delete` throwing,
-  the initial `getRecords` fetch throwing) are logged via `console.error` with
-  `application_reference`/`references` metadata but only ever surface a `500` generic body to the
-  caller — never the underlying error. Deliberately
-  **not transactional** (delete and re-ingest are separate operations, not one DB transaction)
-  — a follow-up ticket specs that.
+  only when ingest succeeds. On a still-failing retry, the row is **not** left untouched: it
+  calls `update("formerrors", "id", id, { schema_errors, runtime_errors })` (#34) writing a
+  **full snapshot of the current failure across both columns** — the column matching this
+  attempt's failure type (`schema_errors` for a `statusCode: 400` I1 validation failure,
+  `runtime_errors` for anything else, e.g. a `409` duplicate) gets the latest errors and the
+  other column is **cleared to null** — so the row always represents why the form is failing
+  *now* rather than a stale mix of past and present failures (e.g. a prior runtime failure that's
+  since been fixed is nulled when the form now fails schema validation). The `update` also bumps
+  `updated_at`. A failure to persist that update is logged but doesn't change
+  the reference's already-rejected outcome. Responds `200` with an array, one entry per input
+  reference, **preserving input order**. Each entry carries its `application_reference` plus a
+  `status` (`{status, application_reference, value}` on success / `{status, application_reference}`
+  on failure); an unmatched reference settles rejected without ever calling the ingest lib,
+  `update`, or `delete`. Failure reasons are **deliberately withheld from the response** for
+  security/privacy reasons (they can leak validator internals or stack traces) — the exact
+  failure shape a caller should see still needs more thought. Unexpected errors (ingest lib
+  throwing, `update`/`delete` throwing, the initial `getRecords` fetch throwing) are logged via
+  `console.error` with `application_reference`/`references` metadata but only ever surface a
+  `500` generic body to the caller — never the underlying error. Deliberately
+  **not transactional** (delete/update and re-ingest are separate operations, not one DB
+  transaction) — a follow-up ticket specs that.
 - `src/forms/schemas/` — `ingested_schema.ts` (inbound shape), `transformed_schema.ts` (outbound shape).
   Note the mismatch is deliberate: snake_case→camelCase, `name`→`firstName`/`lastName`,
   `date_of_birth: string`→`dateOfBirth: Date`, gender `"other"`→`"prefer-not-to-say"`,
@@ -108,17 +117,21 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
     `PGDATABASE`/`FORM_INGESTER_DB_PASSWORD` (throws naming every missing/empty var, never the
     password value); `user` is hardcoded to `"form_ingester"` in code, never read from env. The
     `postgresClient` singleton is built by calling it once at module load. Deliberately does not
-    return `HttpResponse<T>` — `pg`'s `Pool` has no HTTP status to wrap. Three generic CRUD
+    return `HttpResponse<T>` — `pg`'s `Pool` has no HTTP status to wrap. Four generic CRUD
     methods are attached onto the singleton (not exported standalone): `create<T>(tableName,
     data)` (INSERT ... RETURNING \*), `getRecords<T>(tableName, idColumn, ids)` (SELECT ... WHERE
     idColumn IN (...), with an early-return `[]` guard for an empty `ids` array — avoids an
-    invalid empty `IN ()`), and `delete(tableName, idColumn, id)` (DELETE ... WHERE idColumn = id;
-    rejects with an Error naming the table/idColumn/id if `rowCount` is 0 — no silent no-op).
-    All three use parameterised queries for values; `tableName`/
+    invalid empty `IN ()`), `update<T>(tableName, idColumn, id, data)` (UPDATE ... SET <data's
+    columns>, updated_at = now() WHERE idColumn = id RETURNING \*; `updated_at` is always bumped
+    regardless of which columns the caller passes, so call sites never have to remember it),
+    and `delete(tableName, idColumn, id)` (DELETE ... WHERE idColumn = id;
+    rejects with an Error naming the table/idColumn/id if `rowCount` is 0 — no silent no-op;
+    `update` mirrors this same 0-row guard on its `RETURNING` rows). All four use parameterised
+    queries for values; `tableName`/
     `idColumn` are only ever passed by trusted internal call sites (`Forms`/`FormErrors`), never
     from request bodies, so they're interpolated directly. `delete` is attached as an object
     property (not a `function delete` declaration) since `delete` is a reserved word as a
-    standalone identifier but a valid property key. None of the three catch/transform `pg`
+    standalone identifier but a valid property key. None of the four catch/transform `pg`
     errors — callers (ingest/retry) branch on error shape (e.g. `error.code === '23505'` for a
     primary-key conflict). Also exports `isDatabaseError(err)`, a `err instanceof DatabaseError`
     guard (pg's own class, re-exported from `pg-protocol` — a first-party, stable signal, not
@@ -135,16 +148,20 @@ Full brief: `README.md`. Build plan / ticket breakdown: `tasks.md`.
   `application_reference` is parseable (malformed JSON body).
   `tests/providers/postgres-client.test.ts` unit-tests
   `createPostgresPool()`/the singleton with `pg` mocked; `tests/providers/postgres-client-crud.test.ts`
-  integration-tests `create`/`getRecords`/`delete` against the real docker DB (kept in a separate
-  file since the two approaches — mocked vs real `pg` — can't coexist in one jest file once `pg`
-  is auto-mocked at the top).
+  integration-tests `create`/`getRecords`/`update`/`delete` against the real docker DB (kept in a
+  separate file since the two approaches — mocked vs real `pg` — can't coexist in one jest file
+  once `pg` is auto-mocked at the top).
 - `db/schema/` — one `.sql` file per schema object (table, role, etc), applied by
   `npm run db:start` in **filename-sort order** via `db/apply-schema.sh`. Prefix files if
   ordering matters, relative to the existing uppercase-leading names (e.g.
   `zz_FormIngesterRole.sql` runs after `Forms.sql`/`FormErrors.sql` since its grants target
   those tables — a numeric prefix would sort *before* them instead). Files must be
   **idempotent** (`CREATE TABLE IF NOT EXISTS`, guarded `CREATE ROLE`, etc.) — every file is
-  re-applied on every `db:start`, including against an already-provisioned database.
+  re-applied on every `db:start`, including against an already-provisioned database. A column
+  added to a table after its initial `CREATE TABLE` ships as an `ALTER TABLE ... ADD COLUMN IF
+  NOT EXISTS` appended to that table's file, per the same idempotency rule (e.g.
+  `FormErrors.sql`'s `created_at`/`updated_at`, added post-creation to back `postgresClient`'s
+  `update` method — see #34).
   `zz_FormIngesterRole.sql` creates the `form_ingester` login role (no superuser/createdb/
   createrole) the app connects as, with CRUD-only grants on `Forms`/`FormErrors` — the app's
   `pg` client (`src/providers/postgres-client.ts`) is hardcoded to connect as this role.
